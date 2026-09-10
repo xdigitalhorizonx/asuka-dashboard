@@ -28,6 +28,11 @@ export default function Dashboard() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {store.syncedAt && (
+              <span className="hidden text-[11px] text-[#9a9086] sm:inline">
+                Synced {new Date(store.syncedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+              </span>
+            )}
             <button onClick={store.exportJson} className="rounded-md border border-[#2a2a32] px-3 py-1.5 text-sm hover:border-[#ff4d2e]">Export</button>
             <label className="cursor-pointer rounded-md border border-[#2a2a32] px-3 py-1.5 text-sm hover:border-[#f5c16c]">
               Import
@@ -42,9 +47,9 @@ export default function Dashboard() {
         </nav>
       </header>
       <main className="mx-auto max-w-7xl px-5 py-6">
-        {!store.hydrated ? <p className="text-[#9a9086]">Loading local vault…</p> : tab === "overview" ? (
+        {!store.hydrated ? <p className="text-[#9a9086]">Loading command center…</p> : tab === "overview" ? (
           <div className="space-y-6">
-            <section className="panel rounded-2xl p-6"><p className="text-sm text-[#9a9086]">Ops board for <span className="text-[#ff4d2e]">@asuka langley</span>. Grokbot reminders do not auto-sync — log them here.</p></section>
+            <section className="panel rounded-2xl p-6"><p className="text-sm text-[#9a9086]">Ops board for <span className="text-[#ff4d2e]">@asuka langley</span>. SMS reminders and leads sync automatically — refresh is optional.</p></section>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
               {[{ l: "Due today", v: dueToday.length, t: "reminders" as Tab }, { l: "Open reminders", v: openReminders.length, t: "reminders" as Tab }, { l: "Notes", v: store.notes.length, t: "notes" as Tab }, { l: "Attachments", v: store.attachments.length, t: "files" as Tab }, { l: "Active pipeline", v: pipeline.length, t: "crm" as Tab }].map((c) => (
                 <button key={c.l} onClick={() => setTab(c.t)} className="panel rounded-xl p-4 text-left hover:border-[#ff4d2e]"><p className="text-xs uppercase tracking-wider text-[#9a9086]">{c.l}</p><p className="mt-2 text-3xl font-semibold">{c.v}</p></button>
