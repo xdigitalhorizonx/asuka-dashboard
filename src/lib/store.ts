@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AppState, Attachment, Lead, Note, Reminder } from "./types";
 
 const KEY = "asuka-command-center-v1";
+const POLL_MS = 20_000;
 
 const seed: AppState = {
   reminders: [],
@@ -11,7 +12,7 @@ const seed: AppState = {
     {
       id: "n1",
       title: "How this board works",
-      body: "Asuka does not expose a public reminder API yet. Log what she sets here. Export JSON as a backup.",
+      body: "Asuka SMS sync is live. Reminders and CRM leads she logs by text show up here automatically.",
       updatedAt: new Date().toISOString(),
       pinned: true,
     },
@@ -20,36 +21,118 @@ const seed: AppState = {
   leads: [],
 };
 
-function load(): AppState {
+function normalize(parsed: Partial<AppState> | null | undefined): AppState {
+  return {
+    reminders: parsed?.reminders ?? [],
+    notes: parsed?.notes ?? [],
+    attachments: parsed?.attachments ?? [],
+    leads: parsed?.leads ?? [],
+  };
+}
+
+function loadLocal(): AppState {
   if (typeof window === "undefined") return seed;
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return seed;
-    const parsed = JSON.parse(raw) as AppState;
-    return {
-      reminders: parsed.reminders ?? [],
-      notes: parsed.notes ?? [],
-      attachments: parsed.attachments ?? [],
-      leads: parsed.leads ?? [],
-    };
+    return normalize(JSON.parse(raw) as AppState);
   } catch {
     return seed;
+  }
+}
+
+async function fetchServer(): Promise<AppState | null> {
+  try {
+    const res = await fetch("/api/state", { cache: "no-store" });
+    if (!res.ok) return null;
+    return normalize(await res.json());
+  } catch {
+    return null;
+  }
+}
+
+async function persistServer(state: AppState): Promise<void> {
+  try {
+    await fetch("/api/state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ state }),
+    });
+  } catch {
+    // offline / blob not configured — localStorage still holds a copy
   }
 }
 
 export function useAsukaStore() {
   const [state, setState] = useState<AppState>(seed);
   const [hydrated, setHydrated] = useState(false);
+  const [syncedAt, setSyncedAt] = useState<string | null>(null);
+  const skipNextPersist = useRef(true);
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   useEffect(() => {
-    setState(load());
-    setHydrated(true);
+    let cancelled = false;
+    (async () => {
+      const local = loadLocal();
+      if (!cancelled) setState(local);
+      const remote = await fetchServer();
+      if (!cancelled && remote) {
+        setState(remote);
+        setSyncedAt(new Date().toISOString());
+        localStorage.setItem(KEY, JSON.stringify(remote));
+      }
+      if (!cancelled) {
+        skipNextPersist.current = true;
+        setHydrated(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
     if (!hydrated) return;
     localStorage.setItem(KEY, JSON.stringify(state));
+    if (skipNextPersist.current) {
+      skipNextPersist.current = false;
+      return;
+    }
+    const t = setTimeout(() => {
+      void persistServer(state);
+    }, 400);
+    return () => clearTimeout(t);
   }, [state, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const pull = async () => {
+      const remote = await fetchServer();
+      if (!remote) return;
+      const local = JSON.stringify(stateRef.current);
+      const next = JSON.stringify(remote);
+      if (local === next) {
+        setSyncedAt(new Date().toISOString());
+        return;
+      }
+      skipNextPersist.current = true;
+      setState(remote);
+      setSyncedAt(new Date().toISOString());
+      localStorage.setItem(KEY, next);
+    };
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") void pull();
+    }, POLL_MS);
+    const onVis = () => {
+      if (document.visibilityState === "visible") void pull();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [hydrated]);
 
   const setReminders = useCallback(
     (fn: (prev: Reminder[]) => Reminder[]) =>
@@ -84,13 +167,8 @@ export function useAsukaStore() {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const parsed = JSON.parse(String(reader.result)) as AppState;
-        setState({
-          reminders: parsed.reminders ?? [],
-          notes: parsed.notes ?? [],
-          attachments: parsed.attachments ?? [],
-          leads: parsed.leads ?? [],
-        });
+        const parsed = normalize(JSON.parse(String(reader.result)) as AppState);
+        setState(parsed);
       } catch {
         alert("Could not parse that JSON backup.");
       }
@@ -98,7 +176,17 @@ export function useAsukaStore() {
     reader.readAsText(file);
   }, []);
 
-  return { ...state, hydrated, setReminders, setNotes, setAttachments, setLeads, exportJson, importJson };
+  return {
+    ...state,
+    hydrated,
+    syncedAt,
+    setReminders,
+    setNotes,
+    setAttachments,
+    setLeads,
+    exportJson,
+    importJson,
+  };
 }
 
 export function uid(prefix = "id") {
