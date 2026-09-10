@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #09090b;
+  --panel: #16161b;
+  --line: #2a2a32;
+  --text: #f4efe8;
+  --muted: #9a9086;
+  --accent: #ff4d2e;
+  --accent-2: #f5c16c;
+}
+
+html,
+body {
+  background: #09090b;
+  color: #f4efe8;
+  min-height: 100%;
+}
+
+body {
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a2a32 transparent;
+}
+
+.panel {
+  background: linear-gradient(180deg, #1a1a21 0%, #131318 100%);
+  border: 1px solid #2a2a32;
+  box-shadow: 0 0 0 1px rgba(255, 77, 46, 0.04), 0 18px 40px -24px rgba(0, 0, 0, 0.8);
+}
+
+.accent-glow {
+  box-shadow: 0 0 24px -8px rgba(255, 77, 46, 0.55);
+}
+
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(255, 77, 46, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 77, 46, 0.04) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
