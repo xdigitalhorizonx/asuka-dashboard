@@ -21,12 +21,19 @@ const seed: AppState = {
   leads: [],
 };
 
+function normalizeLead(lead: Lead): Lead {
+  return {
+    ...lead,
+    callNotes: Array.isArray(lead.callNotes) ? lead.callNotes : [],
+  };
+}
+
 function normalize(parsed: Partial<AppState> | null | undefined): AppState {
   return {
     reminders: parsed?.reminders ?? [],
     notes: parsed?.notes ?? [],
     attachments: parsed?.attachments ?? [],
-    leads: parsed?.leads ?? [],
+    leads: (parsed?.leads ?? []).map(normalizeLead),
   };
 }
 
