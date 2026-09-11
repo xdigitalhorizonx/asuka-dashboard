@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { Crm } from "@/components/CrmPanel";
-import { Overview, Reminders, CalendarView, Notes, Attachments } from "@/components/DashTabs";
+import { Overview, Reminders } from "@/components/DashOverview";
+import { CalendarView, Notes, Attachments } from "@/components/DashMore";
 import { useAsukaStore } from "@/lib/store";
 
 type Tab = "overview" | "reminders" | "calendar" | "notes" | "files" | "crm";
