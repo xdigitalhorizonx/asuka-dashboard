@@ -83,6 +83,7 @@ export async function POST(req: Request) {
             { status: 400 }
           );
         }
+        const existing = state.leads.find((l) => l.id === lead.id);
         const normalized: Lead = {
           id: lead.id,
           name: lead.name,
@@ -92,6 +93,9 @@ export async function POST(req: Request) {
           value: Number(lead.value) || 0,
           stage: lead.stage ?? "new_lead",
           notes: lead.notes ?? "",
+          callNotes: Array.isArray(lead.callNotes)
+            ? lead.callNotes
+            : existing?.callNotes ?? [],
           createdAt: lead.createdAt || new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };

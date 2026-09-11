@@ -1,5 +1,5 @@
 import { put, list } from "@vercel/blob";
-import type { AppState, Reminder } from "./types";
+import type { AppState, Lead, Reminder } from "./types";
 
 export const BLOB_PATHNAME = "asuka-command-center/state.json";
 
@@ -83,13 +83,20 @@ export function seededState(): AppState {
   return { ...base, reminders: SEED_REMINDERS };
 }
 
+function normalizeLead(lead: Lead): Lead {
+  return {
+    ...lead,
+    callNotes: Array.isArray(lead.callNotes) ? lead.callNotes : [],
+  };
+}
+
 function normalize(raw: unknown): AppState {
   const parsed = (raw ?? {}) as Partial<AppState>;
   return {
     reminders: parsed.reminders ?? [],
     notes: parsed.notes ?? [],
     attachments: parsed.attachments ?? [],
-    leads: parsed.leads ?? [],
+    leads: (parsed.leads ?? []).map(normalizeLead),
   };
 }
 
