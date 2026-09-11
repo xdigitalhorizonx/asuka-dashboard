@@ -1,1 +1,1 @@
-FILE_CONTENT_FROM_/workspace/asuka-v2/src/components/Dashboard.tsx
+@file:///workspace/asuka-v2/src/components/Dashboard.tsx
