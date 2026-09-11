@@ -1,1 +1,1 @@
-PLACEHOLDER_LOAD_FROM_DISK
+FILE_CONTENT_FROM_/workspace/asuka-v2/src/components/Dashboard.tsx
