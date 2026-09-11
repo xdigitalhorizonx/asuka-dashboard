@@ -7,6 +7,7 @@ Dark-mode ops dashboard for conversations with the Asuka Langley Grokbot agent.
 - Notes
 - Attachments
 - CRM kanban: New Lead, Proposal Sent, Closed/Won, Lost — SMS leads land in **New Lead**
+- Lead call notes: timestamped notes on a lead (newest first), persisted with CRM state
 - JSON export / import (local backup) + Vercel Blob server vault
 
 ```bash

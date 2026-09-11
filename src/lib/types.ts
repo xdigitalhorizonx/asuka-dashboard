@@ -32,6 +32,12 @@ export interface Attachment {
 
 export type CrmStage = "new_lead" | "proposal_sent" | "closed_won" | "lost";
 
+export interface CallNote {
+  id: string;
+  body: string;
+  createdAt: string;
+}
+
 export interface Lead {
   id: string;
   name: string;
@@ -41,6 +47,7 @@ export interface Lead {
   value: number;
   stage: CrmStage;
   notes: string;
+  callNotes: CallNote[];
   createdAt: string;
   updatedAt: string;
 }
