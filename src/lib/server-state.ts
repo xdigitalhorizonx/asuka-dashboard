@@ -1,7 +1,18 @@
 import { put, list } from "@vercel/blob";
-import type { AppState, Reminder } from "./types";
+import { promises as fs } from "fs";
+import path from "path";
+import { normalizeCustomers, normalizeLeads, type AppState, type Reminder } from "./types";
 
 export const BLOB_PATHNAME = "asuka-command-center/state.json";
+
+/**
+ * Dev-only fallback: when BLOB_READ_WRITE_TOKEN is absent and this is not a
+ * production build, persist to a JSON file in the project root (gitignored) so
+ * the board works end-to-end on localhost without touching the live vault.
+ */
+const LOCAL_VAULT = path.join(process.cwd(), ".asuka-local-state.json");
+const blobToken = () => process.env.BLOB_READ_WRITE_TOKEN;
+const localVaultEnabled = () => !blobToken() && process.env.NODE_ENV !== "production";
 
 const SEED_REMINDERS: Reminder[] = [
   {
@@ -75,6 +86,7 @@ export function emptyState(): AppState {
     ],
     attachments: [],
     leads: [],
+    customers: [],
   };
 }
 
@@ -89,12 +101,13 @@ function normalize(raw: unknown): AppState {
     reminders: parsed.reminders ?? [],
     notes: parsed.notes ?? [],
     attachments: parsed.attachments ?? [],
-    leads: parsed.leads ?? [],
+    leads: normalizeLeads(parsed.leads),
+    customers: normalizeCustomers(parsed.customers),
   };
 }
 
 async function findBlobUrl(): Promise<string | null> {
-  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  const token = blobToken();
   if (!token) return null;
   const result = await list({ prefix: BLOB_PATHNAME, limit: 10, token });
   const hit = result.blobs.find((b) => b.pathname === BLOB_PATHNAME);
@@ -102,8 +115,17 @@ async function findBlobUrl(): Promise<string | null> {
 }
 
 export async function readState(): Promise<AppState> {
-  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  const token = blobToken();
   if (!token) {
+    if (localVaultEnabled()) {
+      try {
+        return normalize(JSON.parse(await fs.readFile(LOCAL_VAULT, "utf8")));
+      } catch {
+        const seeded = seededState();
+        await writeState(seeded);
+        return seeded;
+      }
+    }
     return seededState();
   }
   try {
@@ -138,11 +160,15 @@ export async function readState(): Promise<AppState> {
 }
 
 export async function writeState(state: AppState): Promise<AppState> {
-  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  const token = blobToken();
+  const normalized = normalize(state);
   if (!token) {
+    if (localVaultEnabled()) {
+      await fs.writeFile(LOCAL_VAULT, JSON.stringify(normalized, null, 2), "utf8");
+      return normalized;
+    }
     throw new Error("BLOB_READ_WRITE_TOKEN is not configured");
   }
-  const normalized = normalize(state);
   await put(BLOB_PATHNAME, JSON.stringify(normalized), {
     access: "public",
     addRandomSuffix: false,

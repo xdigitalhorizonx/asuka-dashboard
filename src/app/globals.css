@@ -1,5 +1,5 @@
-@import "tailwindcss";
 @import url("https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500;600;700&display=swap");
+@import "tailwindcss";
 
 :root {
   --color-bg: #06090f;
@@ -9,6 +9,7 @@
   --color-accent: #00d4ff;
   --color-green: #10b981;
   --color-amber: #f59e0b;
+  --color-violet: #a78bfa;
   --color-muted: #64748b;
   --color-text: #e2e8f0;
   --color-border: rgba(255, 255, 255, 0.06);

@@ -1,10 +1,13 @@
 "use client";
 
 import { useMemo, useState, type CSSProperties } from "react";
-import { CRM_STAGES, type CrmStage, type Lead, type Reminder, type ReminderPriority } from "@/lib/types";
+import type { Lead, Reminder, ReminderPriority } from "@/lib/types";
 import { uid, useAsukaStore } from "@/lib/store";
+import { apptTime, hasAppointment, localToday } from "@/lib/crm";
+import { Crm } from "./Crm";
+import { Customers, money } from "./Customers";
 
-type Tab = "overview" | "reminders" | "calendar" | "notes" | "files" | "crm";
+type Tab = "overview" | "reminders" | "calendar" | "notes" | "files" | "crm" | "customers";
 type Store = ReturnType<typeof useAsukaStore>;
 
 const NAV: { id: Tab; label: string; icon: string }[] = [
@@ -14,6 +17,7 @@ const NAV: { id: Tab; label: string; icon: string }[] = [
   { id: "notes", label: "Notes", icon: "✎" },
   { id: "files", label: "Attachments", icon: "▢" },
   { id: "crm", label: "CRM", icon: "◈" },
+  { id: "customers", label: "Customers", icon: "$" },
 ];
 
 const PRI: ReminderPriority[] = ["low", "medium", "high"];
@@ -21,13 +25,6 @@ const PRI_LABEL: Record<ReminderPriority, string> = { high: "HIGH", medium: "MED
 
 function priColor(p: ReminderPriority) {
   return p === "high" ? "var(--color-primary)" : p === "medium" ? "var(--color-amber)" : "var(--color-muted)";
-}
-
-function stageColor(s: CrmStage) {
-  if (s === "new_lead") return "var(--color-accent)";
-  if (s === "proposal_sent") return "var(--color-amber)";
-  if (s === "closed_won") return "var(--color-green)";
-  return "var(--color-muted)";
 }
 
 function fileKind(name: string, mime: string) {
@@ -49,18 +46,13 @@ function fmtBytes(n: number) {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function initials(name: string) {
-  const parts = name.trim().split(/\s+/).slice(0, 2);
-  return parts.map((p) => p[0]?.toUpperCase() || "").join("") || "?";
-}
-
-export default function Dashboard() {
+export default function Dashboard({ lockable = false }: { lockable?: boolean }) {
   const store = useAsukaStore();
   const [tab, setTab] = useState<Tab>("overview");
   const [collapsed, setCollapsed] = useState(false);
   const [monthOffset, setMonthOffset] = useState(0);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localToday();
   const openReminders = store.reminders.filter((r) => !r.done);
   const dueToday = openReminders.filter((r) => r.dueAt === today);
   const pipeline = store.leads.filter((l) => l.stage !== "lost" && l.stage !== "closed_won");
@@ -130,18 +122,25 @@ export default function Dashboard() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11 }}>
-              <span className="dot-live" />
-              {store.syncedAt
-                ? `SYNCED ${new Date(store.syncedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
-                : store.hydrated
-                  ? "LOCAL"
-                  : "LOADING"}
+              <span className="dot-live" style={store.syncError ? { background: "var(--color-primary)", boxShadow: "0 0 8px var(--color-primary)" } : undefined} />
+              {store.syncError
+                ? `SYNC ERROR · ${store.syncError}`
+                : store.syncedAt
+                  ? `SYNCED ${new Date(store.syncedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+                  : store.hydrated
+                    ? "LOCAL"
+                    : "LOADING"}
             </div>
             <button onClick={store.exportJson} className="btn" style={{ padding: "7px 12px" }}>EXPORT</button>
             <label className="btn" style={{ padding: "7px 12px", cursor: "pointer" }}>
               IMPORT
               <input type="file" accept="application/json" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) store.importJson(f); e.target.value = ""; }} />
             </label>
+            {lockable && (
+              <form method="post" action="/api/logout" style={{ display: "contents" }}>
+                <button className="btn" style={{ padding: "7px 12px", color: "var(--color-muted)" }} title="Lock this board (sign out)">LOCK</button>
+              </form>
+            )}
           </div>
         </header>
 
@@ -155,6 +154,7 @@ export default function Dashboard() {
           ) : tab === "calendar" ? (
             <CalendarView
               reminders={store.reminders}
+              leads={store.leads}
               monthOffset={monthOffset}
               setMonthOffset={setMonthOffset}
               onToggle={(id) => store.setReminders((rs) => rs.map((r) => (r.id === id ? { ...r, done: !r.done } : r)))}
@@ -163,6 +163,8 @@ export default function Dashboard() {
             <Notes store={store} />
           ) : tab === "files" ? (
             <Attachments store={store} />
+          ) : tab === "customers" ? (
+            <Customers store={store} />
           ) : (
             <Crm store={store} />
           )}
@@ -185,23 +187,39 @@ function Spark({ n, max = 8 }: { n: number; max?: number }) {
 
 function Overview({ store, dueToday, openReminders, pipeline, setTab }: { store: Store; dueToday: Reminder[]; openReminders: Reminder[]; pipeline: Lead[]; setTab: (t: Tab) => void }) {
   const high = openReminders.filter((r) => r.priority === "high");
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localToday();
   const schedule = openReminders.filter((r) => r.dueAt === today).slice(0, 6);
+  const apptsToday = store.leads
+    .filter((l) => hasAppointment(l) && l.appointmentAt.slice(0, 10) === today)
+    .sort((a, b) => (a.appointmentAt || "").localeCompare(b.appointmentAt || ""));
+  const apptsSet = store.leads.filter((l) => l.stage === "appointment_set").length;
+  const ym = today.slice(0, 7);
+  const monthRevenue = store.customers.reduce((s, c) => s + c.transactions.filter((t) => t.date.startsWith(ym)).reduce((a, t) => a + t.amount, 0), 0);
   const activity = useMemo(() => {
     const rows: { t: string; type: string; color: string; label: string }[] = [];
     for (const r of store.reminders) {
       rows.push({ t: r.createdAt, type: r.done ? "DONE" : "TASK", color: r.done ? "var(--color-green)" : priColor(r.priority), label: r.title });
     }
     for (const l of store.leads) {
-      rows.push({ t: l.updatedAt || l.createdAt, type: "LEAD", color: "var(--color-accent)", label: `${l.name} · ${l.company || "no org"}` });
+      rows.push({ t: l.createdAt, type: "LEAD", color: "var(--color-accent)", label: `${l.name} · ${l.company || "no org"}` });
+      for (const n of l.noteLog) {
+        rows.push({ t: n.createdAt, type: "NOTE", color: "var(--color-violet)", label: `${l.name} — ${n.body.length > 90 ? n.body.slice(0, 90) + "…" : n.body}` });
+      }
+    }
+    for (const c of store.customers) {
+      for (const t of c.transactions) {
+        rows.push({ t: t.createdAt, type: "PAID", color: "var(--color-green)", label: `${c.company || c.contact || "Customer"} · ${money(t.amount)} ${t.method}${t.memo ? ` · ${t.memo}` : ""}` });
+      }
     }
     return rows.sort((a, b) => (a.t < b.t ? 1 : -1)).slice(0, 8);
-  }, [store.reminders, store.leads]);
+  }, [store.reminders, store.leads, store.customers]);
 
   const tiles = [
     { l: "DUE TODAY", v: dueToday.length, d: "SMS + board", t: "reminders" as Tab },
     { l: "OPEN TASKS", v: openReminders.length, d: "until resolved", t: "reminders" as Tab },
     { l: "PIPELINE", v: pipeline.length, d: "active leads", t: "crm" as Tab },
+    { l: "APPTS SET", v: apptsSet, d: apptsToday.length ? `${apptsToday.length} today` : "on the calendar", t: "crm" as Tab },
+    { l: "CUSTOMERS", v: store.customers.length, d: monthRevenue ? `${money(monthRevenue)} this month` : "paying clients", t: "customers" as Tab },
     { l: "NOTES", v: store.notes.length, d: "pinned + free", t: "notes" as Tab },
     { l: "FILES", v: store.attachments.length, d: "local vault", t: "files" as Tab },
   ];
@@ -234,7 +252,16 @@ function Overview({ store, dueToday, openReminders, pipeline, setTab }: { store:
         </section>
         <section className="card" style={{ padding: 18 }}>
           <h2 style={{ fontSize: 11, letterSpacing: "0.16em", color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)", marginBottom: 12 }}>TODAY · SCHEDULE</h2>
-          {schedule.length === 0 && <p style={{ color: "var(--color-muted)", fontSize: 13 }}>Nothing due today.</p>}
+          {schedule.length === 0 && apptsToday.length === 0 && <p style={{ color: "var(--color-muted)", fontSize: 13 }}>Nothing due today.</p>}
+          {apptsToday.map((l) => (
+            <div key={l.id} style={{ display: "flex", gap: 12, padding: "10px 0", borderTop: "1px solid var(--color-border)" }}>
+              <div style={{ width: 3, borderRadius: 2, background: "var(--color-violet)" }} />
+              <div>
+                <div style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11, color: "var(--color-violet)" }}>{apptTime(l.appointmentAt ?? "")} · APPOINTMENT</div>
+                <div style={{ fontSize: 13 }}>{l.name}{l.company ? ` · ${l.company}` : ""}</div>
+              </div>
+            </div>
+          ))}
           {schedule.map((r) => (
             <div key={r.id} style={{ display: "flex", gap: 12, padding: "10px 0", borderTop: "1px solid var(--color-border)" }}>
               <div style={{ width: 3, borderRadius: 2, background: priColor(r.priority) }} />
@@ -265,7 +292,7 @@ function Overview({ store, dueToday, openReminders, pipeline, setTab }: { store:
 function Reminders({ store }: { store: Store }) {
   const [filter, setFilter] = useState<"all" | "active" | "done">("active");
   const [title, setTitle] = useState("");
-  const [dueAt, setDueAt] = useState(new Date().toISOString().slice(0, 10));
+  const [dueAt, setDueAt] = useState(localToday());
   const [time, setTime] = useState("");
   const [priority, setPriority] = useState<ReminderPriority>("medium");
   const [notes, setNotes] = useState("");
@@ -334,8 +361,8 @@ function Reminders({ store }: { store: Store }) {
   );
 }
 
-function CalendarView({ reminders, monthOffset, setMonthOffset, onToggle }: { reminders: Reminder[]; monthOffset: number; setMonthOffset: (n: number | ((p: number) => number)) => void; onToggle: (id: string) => void }) {
-  const [selected, setSelected] = useState<string | null>(new Date().toISOString().slice(0, 10));
+function CalendarView({ reminders, leads, monthOffset, setMonthOffset, onToggle }: { reminders: Reminder[]; leads: Lead[]; monthOffset: number; setMonthOffset: (n: number | ((p: number) => number)) => void; onToggle: (id: string) => void }) {
+  const [selected, setSelected] = useState<string | null>(localToday());
   const view = useMemo(() => {
     const now = new Date();
     const d = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
@@ -346,8 +373,19 @@ function CalendarView({ reminders, monthOffset, setMonthOffset, onToggle }: { re
     for (const r of reminders) (map[r.dueAt] ??= []).push(r);
     return map;
   }, [reminders]);
+  const apptByDay = useMemo(() => {
+    const map: Record<string, Lead[]> = {};
+    for (const l of leads) {
+      if (!hasAppointment(l)) continue;
+      (map[l.appointmentAt.slice(0, 10)] ??= []).push(l);
+    }
+    for (const k of Object.keys(map)) map[k].sort((a, b) => (a.appointmentAt || "").localeCompare(b.appointmentAt || ""));
+    return map;
+  }, [leads]);
   const cells: (number | null)[] = [...Array(view.startDow).fill(null), ...Array.from({ length: view.daysInMonth }, (_, i) => i + 1)];
   const detail = selected ? byDay[selected] ?? [] : [];
+  const detailAppts = selected ? apptByDay[selected] ?? [] : [];
+  const today = localToday();
 
   return (
     <div style={{ display: "grid", gap: 16, gridTemplateColumns: "1fr 280px" }}>
@@ -365,22 +403,35 @@ function CalendarView({ reminders, monthOffset, setMonthOffset, onToggle }: { re
             if (!day) return <div key={`e${i}`} />;
             const iso = `${view.year}-${String(view.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
             const items = byDay[iso] ?? [];
-            const isToday = iso === new Date().toISOString().slice(0, 10);
+            const appts = apptByDay[iso] ?? [];
+            const isToday = iso === today;
             const isSel = iso === selected;
             return (
               <button key={iso} onClick={() => setSelected(iso)} style={{ minHeight: 72, borderRadius: 8, border: `1px solid ${isSel ? "var(--color-primary)" : isToday ? "rgba(0,212,255,0.4)" : "var(--color-border)"}`, background: isSel ? "rgba(255,45,85,0.08)" : "transparent", padding: 6, textAlign: "left", cursor: "pointer", color: "inherit" }}>
                 <div style={{ fontSize: 11, fontFamily: "var(--font-geist-mono), var(--font-mono)", color: isToday ? "var(--color-accent)" : "var(--color-muted)" }}>{day}</div>
                 <div style={{ display: "flex", gap: 3, marginTop: 6, flexWrap: "wrap" }}>
+                  {appts.slice(0, 4).map((l) => <span key={l.id} title={`${apptTime(l.appointmentAt ?? "")} ${l.name}`} style={{ width: 6, height: 6, borderRadius: 1, background: "var(--color-violet)" }} />)}
                   {items.slice(0, 4).map((r) => <span key={r.id} style={{ width: 6, height: 6, borderRadius: "50%", background: r.done ? "var(--color-muted)" : priColor(r.priority) }} />)}
                 </div>
               </button>
             );
           })}
         </div>
+        <div style={{ display: "flex", gap: 14, marginTop: 10, fontSize: 10, letterSpacing: "0.1em", color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: 1, background: "var(--color-violet)" }} />APPOINTMENT</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-amber)" }} />REMINDER</span>
+        </div>
       </div>
       <aside className="card" style={{ padding: 18 }}>
         <h2 style={{ fontSize: 11, letterSpacing: "0.16em", color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)", marginBottom: 12 }}>{selected || "DAY"}</h2>
-        {detail.length === 0 && <p style={{ color: "var(--color-muted)", fontSize: 13 }}>No events this day.</p>}
+        {detail.length === 0 && detailAppts.length === 0 && <p style={{ color: "var(--color-muted)", fontSize: 13 }}>No events this day.</p>}
+        {detailAppts.map((l) => (
+          <div key={l.id} style={{ padding: "10px 0", borderTop: "1px solid var(--color-border)" }}>
+            <div style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11, color: "var(--color-violet)" }}>{apptTime(l.appointmentAt ?? "")} · APPOINTMENT</div>
+            <div>{l.name}</div>
+            <div style={{ fontSize: 11, color: "var(--color-muted)" }}>{l.company || "—"}</div>
+          </div>
+        ))}
         {detail.map((r) => (
           <button key={r.id} onClick={() => onToggle(r.id)} style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: "inherit", cursor: "pointer", padding: "10px 0", borderTop: "1px solid var(--color-border)" }}>
             <div style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11, color: "var(--color-accent)" }}>{r.time || "all-day"} · {PRI_LABEL[r.priority]}</div>
@@ -486,96 +537,6 @@ function Attachments({ store }: { store: Store }) {
             </div>
           );
         })}
-      </div>
-    </div>
-  );
-}
-
-function Crm({ store }: { store: Store }) {
-  const [draft, setDraft] = useState({ name: "", company: "", email: "", phone: "", value: "", notes: "" });
-  const [sel, setSel] = useState<string | null>(store.leads[0]?.id ?? null);
-  const active = store.leads.find((l) => l.id === sel) || null;
-  function move(id: string, stage: CrmStage) {
-    store.setLeads((ls) => ls.map((l) => (l.id === id ? { ...l, stage, updatedAt: new Date().toISOString() } : l)));
-  }
-  return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <form
-        className="card"
-        style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8, padding: 14 }}
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!draft.name.trim()) return;
-          const lead: Lead = { id: uid("l"), name: draft.name.trim(), company: draft.company.trim(), email: draft.email.trim(), phone: draft.phone.trim(), value: Number(draft.value) || 0, stage: "new_lead", notes: draft.notes, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
-          store.setLeads((ls) => [lead, ...ls]);
-          setSel(lead.id);
-          setDraft({ name: "", company: "", email: "", phone: "", value: "", notes: "" });
-        }}
-      >
-        <input style={inp} placeholder="Name" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-        <input style={inp} placeholder="Company" value={draft.company} onChange={(e) => setDraft({ ...draft, company: e.target.value })} />
-        <input style={inp} placeholder="Email" value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} />
-        <input style={inp} placeholder="Phone" value={draft.phone} onChange={(e) => setDraft({ ...draft, phone: e.target.value })} />
-        <input style={inp} placeholder="Value $" value={draft.value} onChange={(e) => setDraft({ ...draft, value: e.target.value })} />
-        <button className="btn btn-primary">ADD LEAD</button>
-      </form>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16 }}>
-        <div className="card" style={{ overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "36px 1.2fr 1fr 90px 100px", gap: 8, padding: "10px 14px", fontSize: 10, letterSpacing: "0.12em", color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)", borderBottom: "1px solid var(--color-border)" }}>
-            <span />
-            <span>NAME</span>
-            <span>ORG</span>
-            <span>STAGE</span>
-            <span>VALUE</span>
-          </div>
-          {store.leads.length === 0 && <p style={{ padding: 16, color: "var(--color-muted)" }}>No leads. Text Asuka: Lead: Name, Company, email, phone</p>}
-          {store.leads.map((l) => (
-            <button key={l.id} onClick={() => setSel(l.id)} style={{ display: "grid", gridTemplateColumns: "36px 1.2fr 1fr 90px 100px", gap: 8, width: "100%", padding: "10px 14px", alignItems: "center", background: l.id === sel ? "rgba(0,212,255,0.06)" : "transparent", border: "none", borderTop: "1px solid var(--color-border)", color: "inherit", cursor: "pointer", textAlign: "left" }}>
-              <span style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,45,85,0.15)", color: "var(--color-primary)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontFamily: "var(--font-geist-mono), var(--font-mono)" }}>{initials(l.name)}</span>
-              <span>{l.name}</span>
-              <span style={{ color: "var(--color-muted)" }}>{l.company || "—"}</span>
-              <span style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 10, color: stageColor(l.stage) }}>{l.stage.replace("_", " ").toUpperCase()}</span>
-              <span style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 12, color: l.value ? "var(--color-amber)" : "var(--color-muted)" }}>{l.value ? `$${l.value.toLocaleString()}` : "—"}</span>
-            </button>
-          ))}
-        </div>
-        <aside className="card" style={{ padding: 18 }}>
-          {!active ? <p style={{ color: "var(--color-muted)" }}>Select a contact.</p> : (
-            <>
-              <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 14 }}>
-                <span style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(255,45,85,0.15)", color: "var(--color-primary)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-geist-mono), var(--font-mono)" }}>{initials(active.name)}</span>
-                <div>
-                  <div style={{ fontWeight: 600 }}>{active.name}</div>
-                  <div style={{ fontSize: 12, color: "var(--color-muted)" }}>{active.company || "Independent"}</div>
-                </div>
-              </div>
-              <p style={{ fontSize: 12, color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)" }}>{active.email || "no email"} · {active.phone || "no phone"}</p>
-              {active.notes && <p style={{ marginTop: 10, fontSize: 13 }}>{active.notes}</p>}
-              <div style={{ marginTop: 16, display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {CRM_STAGES.map((s) => (
-                  <button key={s.id} onClick={() => move(active.id, s.id)} className="btn" style={{ padding: "6px 8px", color: active.stage === s.id ? "#fff" : "var(--color-muted)", background: active.stage === s.id ? "var(--color-primary)" : "transparent" }}>{s.label.toUpperCase()}</button>
-                ))}
-              </div>
-              <button className="btn" style={{ marginTop: 16, padding: "6px 10px", color: "var(--color-primary)" }} onClick={() => { store.setLeads((ls) => ls.filter((x) => x.id !== active.id)); setSel(null); }}>DELETE</button>
-            </>
-          )}
-        </aside>
-      </div>
-      <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(4, 1fr)" }}>
-        {CRM_STAGES.map((col) => (
-          <div key={col.id} className="card" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); const id = e.dataTransfer.getData("text/lead-id"); if (id) move(id, col.id); }} style={{ minHeight: 180, padding: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-              <span style={{ fontSize: 11, letterSpacing: "0.1em", fontFamily: "var(--font-geist-mono), var(--font-mono)", color: stageColor(col.id) }}>{col.label.toUpperCase()}</span>
-              <span style={{ fontSize: 11, color: "var(--color-muted)" }}>{store.leads.filter((l) => l.stage === col.id).length}</span>
-            </div>
-            {store.leads.filter((l) => l.stage === col.id).map((l) => (
-              <article key={l.id} draggable onDragStart={(e) => e.dataTransfer.setData("text/lead-id", l.id)} onClick={() => setSel(l.id)} style={{ padding: 10, marginBottom: 6, borderRadius: 8, border: "1px solid var(--color-border)", cursor: "grab", background: "var(--color-surface)" }}>
-                <div style={{ fontSize: 13 }}>{l.name}</div>
-                <div style={{ fontSize: 11, color: "var(--color-muted)" }}>{l.company || "—"}</div>
-              </article>
-            ))}
-          </div>
-        ))}
       </div>
     </div>
   );

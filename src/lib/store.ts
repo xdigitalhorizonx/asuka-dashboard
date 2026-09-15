@@ -1,10 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AppState, Attachment, Lead, Note, Reminder } from "./types";
+import { normalizeCustomers, normalizeLeads, type AppState, type Attachment, type Customer, type Lead, type Note, type Reminder } from "./types";
 
 const KEY = "asuka-command-center-v1";
 const POLL_MS = 20_000;
+/** After a local write, ignore polled server copies for this long so an edge-cached
+ *  stale read cannot momentarily "undo" a note the user just typed. */
+const WRITE_SETTLE_MS = 10_000;
 
 const seed: AppState = {
   reminders: [],
@@ -19,6 +22,7 @@ const seed: AppState = {
   ],
   attachments: [],
   leads: [],
+  customers: [],
 };
 
 function normalize(parsed: Partial<AppState> | null | undefined): AppState {
@@ -26,7 +30,8 @@ function normalize(parsed: Partial<AppState> | null | undefined): AppState {
     reminders: parsed?.reminders ?? [],
     notes: parsed?.notes ?? [],
     attachments: parsed?.attachments ?? [],
-    leads: parsed?.leads ?? [],
+    leads: normalizeLeads(parsed?.leads),
+    customers: normalizeCustomers(parsed?.customers),
   };
 }
 
@@ -51,15 +56,25 @@ async function fetchServer(): Promise<AppState | null> {
   }
 }
 
-async function persistServer(state: AppState): Promise<void> {
+/** Returns null on success, otherwise a short reason. */
+async function persistServer(state: AppState): Promise<string | null> {
   try {
-    await fetch("/api/state", {
+    const res = await fetch("/api/state", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ state }),
     });
+    if (res.ok) return null;
+    let reason = `HTTP ${res.status}`;
+    try {
+      const j = (await res.json()) as { error?: string };
+      if (j?.error) reason = j.error;
+    } catch {
+      // non-JSON error body
+    }
+    return reason;
   } catch {
-    // offline / blob not configured — localStorage still holds a copy
+    return "offline";
   }
 }
 
@@ -67,9 +82,13 @@ export function useAsukaStore() {
   const [state, setState] = useState<AppState>(seed);
   const [hydrated, setHydrated] = useState(false);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const skipNextPersist = useRef(true);
+  const lastLocalWrite = useRef(0);
   const stateRef = useRef(state);
-  stateRef.current = state;
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   useEffect(() => {
     let cancelled = false;
@@ -99,8 +118,12 @@ export function useAsukaStore() {
       skipNextPersist.current = false;
       return;
     }
-    const t = setTimeout(() => {
-      void persistServer(state);
+    lastLocalWrite.current = Date.now();
+    const t = setTimeout(async () => {
+      const err = await persistServer(state);
+      lastLocalWrite.current = Date.now();
+      setSyncError(err);
+      if (!err) setSyncedAt(new Date().toISOString());
     }, 400);
     return () => clearTimeout(t);
   }, [state, hydrated]);
@@ -108,8 +131,10 @@ export function useAsukaStore() {
   useEffect(() => {
     if (!hydrated) return;
     const pull = async () => {
+      if (Date.now() - lastLocalWrite.current < WRITE_SETTLE_MS) return;
       const remote = await fetchServer();
       if (!remote) return;
+      if (Date.now() - lastLocalWrite.current < WRITE_SETTLE_MS) return;
       const local = JSON.stringify(stateRef.current);
       const next = JSON.stringify(remote);
       if (local === next) {
@@ -152,6 +177,23 @@ export function useAsukaStore() {
     (fn: (prev: Lead[]) => Lead[]) => setState((s) => ({ ...s, leads: fn(s.leads) })),
     []
   );
+  const setCustomers = useCallback(
+    (fn: (prev: Customer[]) => Customer[]) => setState((s) => ({ ...s, customers: fn(s.customers) })),
+    []
+  );
+  /** Adopt a state the server already persisted (e.g. after a Stripe sync) without re-posting it. */
+  const adoptServerState = useCallback((next: AppState) => {
+    const normalized = normalize(next);
+    skipNextPersist.current = true;
+    lastLocalWrite.current = Date.now();
+    setState(normalized);
+    setSyncedAt(new Date().toISOString());
+    try {
+      localStorage.setItem(KEY, JSON.stringify(normalized));
+    } catch {
+      // storage full / unavailable — server copy is authoritative anyway
+    }
+  }, []);
 
   const exportJson = useCallback(() => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
@@ -180,10 +222,13 @@ export function useAsukaStore() {
     ...state,
     hydrated,
     syncedAt,
+    syncError,
     setReminders,
     setNotes,
     setAttachments,
     setLeads,
+    setCustomers,
+    adoptServerState,
     exportJson,
     importJson,
   };

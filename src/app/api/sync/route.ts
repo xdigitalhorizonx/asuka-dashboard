@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { AppState, Lead, Reminder } from "@/lib/types";
+import { isCrmStage, normalizeLead, type AppState, type Lead, type Reminder } from "@/lib/types";
 import { assertSyncAuth, readState, writeState } from "@/lib/server-state";
 
 export const runtime = "nodejs";
@@ -12,7 +12,7 @@ type SyncBody =
   | { action: "upsert_reminder"; reminder: Reminder }
   | { action: "resolve_reminder"; id: string }
   | { action: "remove_reminder"; id: string }
-  | { action: "upsert_lead"; lead: Lead };
+  | { action: "upsert_lead"; lead: Partial<Lead> };
 
 export async function POST(req: Request) {
   if (!assertSyncAuth(req)) {
@@ -77,24 +77,28 @@ export async function POST(req: Request) {
       }
       case "upsert_lead": {
         const lead = body.lead;
-        if (!lead?.id || !lead?.name) {
+        if (!lead || typeof lead.id !== "string" || !lead.id || typeof lead.name !== "string" || !lead.name) {
           return NextResponse.json(
             { error: "lead.id and lead.name required" },
             { status: 400 }
           );
         }
-        const normalized: Lead = {
+        // Partial upsert: fields Asuka does not send are kept from the existing
+        // record, so a re-sync never wipes dashboard-side notes, stage, or appointment.
+        const existing = state.leads.find((l) => l.id === lead.id);
+        const now = new Date().toISOString();
+        const normalized = normalizeLead({
+          ...existing,
+          ...lead,
           id: lead.id,
           name: lead.name,
-          company: lead.company ?? "",
-          email: lead.email ?? "",
-          phone: lead.phone ?? "",
-          value: Number(lead.value) || 0,
-          stage: lead.stage ?? "new_lead",
-          notes: lead.notes ?? "",
-          createdAt: lead.createdAt || new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
+          stage: isCrmStage(lead.stage) ? lead.stage : existing?.stage ?? "new_lead",
+          noteLog: Array.isArray(lead.noteLog) ? lead.noteLog : existing?.noteLog ?? [],
+          appointmentAt:
+            typeof lead.appointmentAt === "string" ? lead.appointmentAt : existing?.appointmentAt,
+          createdAt: lead.createdAt || existing?.createdAt || now,
+          updatedAt: now,
+        });
         const others = state.leads.filter((l) => l.id !== normalized.id);
         state = await writeState({ ...state, leads: [normalized, ...others] });
         break;

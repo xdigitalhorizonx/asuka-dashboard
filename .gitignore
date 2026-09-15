@@ -6,3 +6,5 @@ build
 .env*
 *.tsbuildinfo
 next-env.d.ts
+.asuka-local-state.json
+.claude/
