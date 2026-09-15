@@ -134,6 +134,9 @@ export async function POST() {
           customersUpdated++;
         }
         index(customers[i]);
+        // Duplicate Stripe records for the same email merge into one customer;
+        // remember every Stripe id so their charges attach to the merged record.
+        byStripeId.set(sc.id, customers[i].id);
         continue;
       }
       const created = normalizeCustomer({
