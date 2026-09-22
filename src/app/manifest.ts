@@ -13,8 +13,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "Asuka Langley's ops board — reminders, calendar, notes, CRM, customers.",
     start_url: "/",
     display: "standalone",
-    background_color: "#100e17",
-    theme_color: "#100e17",
+    background_color: "#141327",
+    theme_color: "#141327",
     icons: [
       { src: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
       { src: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
