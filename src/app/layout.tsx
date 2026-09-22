@@ -1,16 +1,12 @@
 import type { Metadata, Viewport } from "next";
-import { DM_Mono, Inter } from "next/font/google";
+import { Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
 
-const inter = Inter({
-  variable: "--font-geist-sans",
+const jakarta = Plus_Jakarta_Sans({
+  variable: "--font-jakarta",
   subsets: ["latin"],
-});
-
-const dmMono = DM_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-  weight: ["400", "500"],
+  weight: ["400", "500", "600"],
+  display: "swap",
 });
 
 const APP_NAME = "Central Dogma";
@@ -39,7 +35,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#100e17",
+  themeColor: "#141327",
   colorScheme: "dark",
 };
 
@@ -47,7 +43,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${inter.variable} ${dmMono.variable} h-full dark`}>
+    <html lang="en" className={`${jakarta.variable} h-full dark`}>
       <body className="min-h-full antialiased">{children}</body>
     </html>
   );

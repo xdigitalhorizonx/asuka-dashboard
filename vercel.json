@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/stripe/sync",
+      "schedule": "15 9 * * *"
+    }
+  ]
+}

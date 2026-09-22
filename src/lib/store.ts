@@ -302,11 +302,17 @@ export function useAsukaStore() {
     (fn: (prev: Customer[]) => Customer[]) => setState((s) => ({ ...s, customers: fn(s.customers) })),
     []
   );
-  /** Adopt a state the server already persisted (e.g. after a Stripe sync) without re-posting it. */
+  /**
+   * Adopt a state the server already persisted (e.g. after a Stripe sync) without
+   * re-posting it. Routes that answer with the raw vault (Stripe sync) carry no
+   * reminders view, so our current reminders are kept rather than replaced.
+   */
   const adoptServerState = useCallback(
     (next: AppState) => {
       const p = next as ServerPayload;
-      adoptRemote({ state: normalize(next), info: p.remindersSource ? infoOf(p) : remindersInfo });
+      const base = normalize(next);
+      const state = p.remindersSource ? base : { ...base, reminders: stateRef.current.reminders };
+      adoptRemote({ state, info: p.remindersSource ? infoOf(p) : remindersInfo });
       lastLocalWrite.current = Date.now();
     },
     [adoptRemote, remindersInfo]

@@ -1,39 +1,53 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 
-/*
-  Central Dogma — pastel-on-dark palette.
-  Base surfaces are deep plum; every accent is a soft pastel tint so the
-  board reads calm at night. Each section of the app owns a different hue
-  (see NAV_HUE in Dashboard.tsx) so the colour actually varies across the UI.
-*/
+/* ───────────────────────── Violet Glass tokens · pastel edition ─────────────────────────
+   Central Dogma runs the Violet Glass layout on a pastel palette: every accent is a soft
+   tint on deep plum, and each section of the app owns its own hue (see NAV in Dashboard.tsx),
+   so the board reads calm at night without collapsing into one colour. */
 :root {
-  --color-bg: #100e17;
-  --color-surface: #16131f;
-  --color-card: #1b1826;
-  --color-ink: #1a1424; /* text on top of a pastel fill */
-  --color-text: #ece8f5;
-  --color-muted: #948da9;
-  --color-border: rgba(255, 255, 255, 0.07);
+  --color-bg: #141327;        /* main background (stage) */
+  --color-surface: #211f37;   /* app window */
+  --color-card: #2b2842;      /* content panels */
+  --color-text: #f4f0ff;      /* main text */
+  --color-muted: #c0b9d4;     /* secondary text */
+  --color-border: #4b4467;    /* borders */
+  --color-primary: #c9b3ff;   /* main accent — pastel lavender */
+  --color-on-primary: #211834;/* dark text on pastel buttons */
+  --color-accent: #9ee8db;    /* secondary accent — pastel teal */
+  --color-selected: #403251;  /* selected items */
+  --color-selected-edge: var(--color-primary);
 
-  /* pastels */
-  --color-primary: #ffa3b5; /* rose — the Asuka red, softened */
-  --color-accent: #9bd8ff; /* sky */
-  --color-green: #a8ecc4; /* mint */
-  --color-amber: #ffd39a; /* apricot */
-  --color-violet: #cdb8ff; /* lavender */
-  --color-peach: #ffbfa3;
+  /* semantic (not accents): state colors for priority, stages, files */
+  --color-green: #a8ecc4;     /* mint */
+  --color-amber: #ffd39a;     /* apricot */
+  --color-violet: #e6b3ff;    /* appointments / orchid — distinct from the lavender accent */
+  --color-danger: #ffa3b5;    /* rose: errors, destructive actions, high priority */
+
+  /* extra pastels so sections can differ from one another.
+     --color-lavender is a literal copy of --color-primary so a dock item can be
+     given "lavender" without creating a cyclic --color-primary reference. */
+  --color-lavender: #c9b3ff;
+  --color-sky: #9bd8ff;
   --color-lemon: #f5eaa3;
   --color-lilac: #e5b8f4;
-  --color-teal: #a3ece6;
+  --color-peach: #ffbfa3;
+  --color-rose: var(--color-danger);
+  --color-mint: var(--color-green);
+  --color-apricot: var(--color-amber);
+  --color-teal: var(--color-accent);
 
-  --font-mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-body: Inter, ui-sans-serif, system-ui, sans-serif;
-  --radius-card: 12px;
-  --radius-btn: 7px;
-  --sidebar-w: 220px;
-  --sidebar-collapsed: 60px;
-  --topbar-h: 56px;
+  --font-body: var(--font-jakarta), "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  /* Plus Jakarta Sans throughout — legacy mono aliases resolve to the same face */
+  --font-mono: var(--font-body);
+  --font-geist-sans: var(--font-body);
+  --font-geist-mono: var(--font-body);
+
+  --radius-card: 20px;
+  --radius-btn: 12px;
+  --radius-input: 12px;
+  --topbar-h: 64px;
+  --motion: 200ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 html,
@@ -41,89 +55,519 @@ body {
   background: var(--color-bg);
   color: var(--color-text);
   min-height: 100%;
+  overflow-x: hidden;
 }
 
 body {
-  font-family: var(--font-geist-sans), var(--font-body);
-  letter-spacing: 0.01em;
+  font-family: var(--font-body);
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.45;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #2b2539 transparent;
+  scrollbar-color: var(--color-border) transparent;
 }
 
-.font-mono {
-  font-family: var(--font-geist-mono), var(--font-mono);
-}
-
-/* Soft pastel glow in two corners so the dark canvas isn't flat. */
-.app-bg {
-  background:
-    radial-gradient(1100px 560px at -8% -10%, color-mix(in srgb, var(--color-primary) 10%, transparent), transparent 62%),
-    radial-gradient(900px 520px at 108% 108%, color-mix(in srgb, var(--color-accent) 9%, transparent), transparent 62%),
-    var(--color-bg);
-}
-
-.card {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 38%),
-    var(--color-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-card);
-}
-
-.btn {
-  border-radius: var(--radius-btn);
-  border: 1px solid var(--color-border);
-  background: transparent;
-  color: var(--color-text);
-  font-family: var(--font-geist-mono), var(--font-mono);
-  font-size: 12px;
-  letter-spacing: 0.06em;
-  cursor: pointer;
-}
-
-.btn-primary {
-  background: var(--color-primary);
-  border-color: var(--color-primary);
-  color: var(--color-ink);
-  font-weight: 500;
-}
-
-.dot-live {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--color-green);
-  box-shadow: 0 0 8px var(--color-green);
-}
-
-.pixel {
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
-}
-
+button,
 input,
 textarea,
 select {
   font-family: inherit;
   color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.font-mono {
+  font-family: var(--font-body);
+}
+
+/* ───────────────────────── Stage, window, glows ───────────────────────── */
+.stage {
+  position: relative;
+  min-height: 100vh;
+  padding: 16px;
+  background: var(--color-bg);
+  isolation: isolate;
+}
+.stage::before,
+.stage::after {
+  content: "";
+  position: fixed;
+  z-index: -1;
+  width: 60vmax;
+  height: 60vmax;
+  border-radius: 50%;
+  pointer-events: none;
+  filter: blur(40px);
+}
+.stage::before {
+  /* lavender glow behind the upper-right corner */
+  top: -30vmax;
+  right: -22vmax;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--color-primary) 28%, transparent), transparent 70%);
+}
+.stage::after {
+  /* rose glow behind the lower-left corner */
+  bottom: -32vmax;
+  left: -24vmax;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--color-rose) 20%, transparent), transparent 70%);
+}
+
+/* pixel-art brand mark (the home-screen icon, reused in the top bar + login) */
+.pixel {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+.brand-mark {
+  flex-shrink: 0;
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent), 0 6px 18px color-mix(in srgb, var(--color-primary) 25%, transparent);
+}
+
+.window {
+  max-width: 1440px;
+  margin: 0 auto;
+  min-height: calc(100vh - 32px);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    inset 0 0 0 1px rgba(181, 154, 255, 0.05),
+    0 30px 80px rgba(6, 4, 20, 0.55),
+    0 8px 24px rgba(6, 4, 20, 0.35);
+  display: flex;
+  flex-direction: column;
+  overflow: clip;
+}
+
+/* ───────────────────────── Panels ───────────────────────── */
+.card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  min-width: 0;
+}
+.card-title {
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 0 0 12px;
+  color: var(--color-text);
+}
+.page-title {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.15;
+  margin: 0;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+.total {
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+.label {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+.money {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* ───────────────────────── Controls ───────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 8px 14px;
+  border-radius: var(--radius-btn);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background-color var(--motion) var(--ease),
+    border-color var(--motion) var(--ease),
+    color var(--motion) var(--ease),
+    transform 120ms var(--ease),
+    box-shadow var(--motion) var(--ease);
+}
+.btn:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 55%, transparent);
+  background: #2f2b48;
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.btn-primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-on-primary);
+}
+.btn-primary:hover {
+  background: color-mix(in srgb, var(--color-primary) 88%, white);
+  border-color: color-mix(in srgb, var(--color-primary) 88%, white);
+}
+.btn-danger {
+  color: var(--color-danger);
+  border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
+}
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+  border-color: var(--color-danger);
+}
+.btn-ghost {
+  background: transparent;
+}
+
+.input {
+  width: 100%;
+  min-height: 40px;
+  border-radius: var(--radius-input);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
+  padding: 9px 12px;
+  font-size: 15px;
+  line-height: 1.3;
+  outline: none;
+  transition: border-color var(--motion) var(--ease), box-shadow var(--motion) var(--ease);
+}
+.input::placeholder {
+  color: rgba(192, 185, 212, 0.7);
+}
+.input:focus-visible {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 25%, transparent);
+}
+input[type="tel"],
+.input-phone {
+  font-size: 16px;
+}
+input[type="date"],
+input[type="time"],
+input[type="datetime-local"] {
   color-scheme: dark;
 }
 
-input::placeholder,
-textarea::placeholder {
-  color: color-mix(in srgb, var(--color-muted) 75%, transparent);
+/* Keyboard focus: visible on everything interactive */
+:where(button, a, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible {
-  border-color: color-mix(in srgb, var(--color-accent) 60%, transparent) !important;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 14%, transparent);
+/* ───────────────────────── Top bar + dock ───────────────────────── */
+.topbar {
+  min-height: var(--topbar-h);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
+}
+.badge-al {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--color-primary) 30%, transparent);
+}
+.sync-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-card);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-muted);
+  letter-spacing: 0.02em;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dot-live {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-green);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-green) 70%, transparent);
+  flex-shrink: 0;
+}
+.dot-live.error {
+  background: var(--color-danger);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-danger) 70%, transparent);
 }
 
-.pri-high { color: var(--color-primary); }
+.dock {
+  display: flex;
+  flex-wrap: wrap; /* every section stays visible; never a hidden sideways scroll */
+  gap: 6px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--color-border);
+}
+.dock-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 14px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--motion) var(--ease),
+    border-color var(--motion) var(--ease),
+    color var(--motion) var(--ease),
+    transform 120ms var(--ease);
+}
+/* Each dock item sets its own --color-primary inline (its section hue), so the
+   glyph, hover tint and active state all take that colour. */
+.dock-item:hover {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+}
+.dock-item:active {
+  transform: translateY(1px);
+}
+.dock-item[aria-current="page"] {
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-primary) 50%, transparent);
+  color: var(--color-primary);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.dock-item svg {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+main.content {
+  flex: 1;
+  padding: 20px;
+  min-width: 0;
+}
+
+/* ───────────────────────── Responsive layout helpers ───────────────────────── */
+/* list + detail: side by side on wide screens, stacked below 1024px */
+.split {
+  display: grid;
+  gap: 16px;
+  align-items: start;
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (min-width: 1024px) {
+  .split {
+    grid-template-columns: minmax(0, 1fr) var(--split-w, 400px);
+  }
+  .split.split-left {
+    grid-template-columns: var(--split-w, 320px) minmax(0, 1fr);
+  }
+}
+
+/* summary tiles */
+.tiles {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+.tiles-3 {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+@media (max-width: 767px) {
+  .tiles-3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* form field grids */
+.fields {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+/* table-like rows: --cols on wide screens, --cols-sm below 640px */
+.rows {
+  display: grid;
+  gap: 8px;
+  align-items: center;
+  grid-template-columns: var(--cols);
+}
+@media (max-width: 639px) {
+  .rows {
+    grid-template-columns: var(--cols-sm, var(--cols));
+  }
+  .hide-sm {
+    display: none !important;
+  }
+}
+@media (max-width: 1023px) {
+  .hide-md {
+    display: none !important;
+  }
+}
+
+/* selectable list rows */
+.row-btn {
+  width: 100%;
+  border: none;
+  border-top: 1px solid var(--color-border);
+  border-left: 3px solid transparent;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  padding: 10px 14px;
+  transition: background-color var(--motion) var(--ease), border-color var(--motion) var(--ease);
+}
+.row-btn:hover {
+  background: color-mix(in srgb, var(--color-primary) 6%, transparent);
+}
+.row-btn[aria-selected="true"] {
+  background: var(--color-selected);
+  border-left-color: var(--color-selected-edge);
+}
+
+/* kanban: 5 columns wide, 2 on tablet, 1 on phones */
+.kanban {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+@media (max-width: 1023px) {
+  .kanban {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 639px) {
+  .kanban {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* calendar grid stays 7-up; cells shrink on phones */
+.cal-cell {
+  min-height: 72px;
+}
+@media (max-width: 639px) {
+  .cal-cell {
+    min-height: 44px;
+  }
+}
+
+/* phones: compact chrome */
+@media (max-width: 767px) {
+  .stage {
+    padding: 8px;
+  }
+  .window {
+    min-height: calc(100vh - 16px);
+  }
+  .topbar,
+  .dock {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  main.content {
+    padding: 14px 12px;
+  }
+  .page-title {
+    font-size: 24px;
+  }
+  .total {
+    font-size: 28px;
+  }
+  /* labeled navigation tiles in a compact grid */
+  .dock {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    overflow: visible;
+  }
+  .dock-item {
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    padding: 8px 4px;
+    font-size: 11px;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.1;
+  }
+}
+@media (max-width: 359px) {
+  .dock {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* ───────────────────────── State colors ───────────────────────── */
+.pri-high { color: var(--color-danger); }
 .pri-medium { color: var(--color-amber); }
 .pri-low { color: var(--color-muted); }
+
+/* ───────────────────────── Motion preferences ───────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

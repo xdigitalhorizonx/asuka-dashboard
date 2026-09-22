@@ -19,6 +19,10 @@ Pastel-on-dark ops dashboard for conversations with the Asuka Langley Grokbot ag
   transactions (**+** → check / cash / card) with all-time and month totals
   - **⟳ SYNC STRIPE** pulls Stripe customers + succeeded charges (`STRIPE_SECRET_KEY`); it only
     fills blank fields and dedupes by Stripe id, so manual corrections are never overwritten
+  - **Real-time**: Stripe calls `POST /api/stripe/webhook` (signature-verified with
+    `STRIPE_WEBHOOK_SECRET`) on charge succeeded/updated/refunded and customer created/updated,
+    so a sale shows up on the board within seconds; a daily Vercel Cron (`vercel.json`, 02:15 PT)
+    re-runs the full sync as a safety net (`CRON_SECRET`)
 - **Password gate**: set `ASUKA_DASHBOARD_PASSWORD` and the whole board (UI + `/api/state`) requires
   a login; `/api/sync` keeps its own bearer token so the Asuka bot is unaffected
 - JSON export / import (local backup) + Vercel Blob server vault
@@ -35,6 +39,8 @@ npm run dev     # without BLOB_READ_WRITE_TOKEN it persists to ./.asuka-local-st
 - `ASUKA_DASHBOARD_PASSWORD` — enables the login gate; leave unset to run the board open
 - `ASUKA_SESSION_SECRET` — signs the session cookie (falls back to the password if unset)
 - `STRIPE_SECRET_KEY` — Digital Horizon Stripe key (a restricted key with Customers + Charges read is enough) for **⟳ SYNC STRIPE**
+- `STRIPE_WEBHOOK_SECRET` — signing secret of the Stripe webhook endpoint pointed at `/api/stripe/webhook`
+- `CRON_SECRET` — lets Vercel Cron call `/api/stripe/sync` through the gate
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_TASKS_REFRESH_TOKEN` — turn on the Google Tasks
   reminders backend (all three required; see below)
 - `GOOGLE_TASKS_LIST` — optional Google task-list id; default `@default` (the account's "My Tasks")

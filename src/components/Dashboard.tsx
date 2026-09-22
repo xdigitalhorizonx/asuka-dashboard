@@ -1,43 +1,57 @@
 "use client";
 
-import { useMemo, useState, type CSSProperties } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import type { Lead, Reminder, ReminderPriority } from "@/lib/types";
 import { uid, useAsukaStore } from "@/lib/store";
 import { apptTime, hasAppointment, localToday, tint } from "@/lib/crm";
+import { haptic } from "@/lib/haptics";
+import { Icon } from "./icons";
 import { Crm } from "./Crm";
 import { Customers, money } from "./Customers";
 
 type Tab = "overview" | "reminders" | "calendar" | "notes" | "files" | "crm" | "customers";
 type Store = ReturnType<typeof useAsukaStore>;
 
-/** Every section owns a pastel hue, so the board doesn't collapse into one accent colour. */
-const NAV: { id: Tab; label: string; icon: string; hue: string }[] = [
-  { id: "overview", label: "Overview", icon: "▣", hue: "var(--color-primary)" },
-  { id: "reminders", label: "Reminders", icon: "☑", hue: "var(--color-amber)" },
-  { id: "calendar", label: "Calendar", icon: "▦", hue: "var(--color-accent)" },
-  { id: "notes", label: "Notes", icon: "✎", hue: "var(--color-lemon)" },
-  { id: "files", label: "Attachments", icon: "▢", hue: "var(--color-lilac)" },
-  { id: "crm", label: "CRM", icon: "◈", hue: "var(--color-violet)" },
-  { id: "customers", label: "Customers", icon: "$", hue: "var(--color-green)" },
+/** Every section owns a pastel hue: the dock glyph, its active state and the matching overview tile use it. */
+const NAV: { id: Tab; label: string; hue: string }[] = [
+  { id: "overview", label: "Overview", hue: "var(--color-rose)" },
+  { id: "reminders", label: "Reminders", hue: "var(--color-apricot)" },
+  { id: "calendar", label: "Calendar", hue: "var(--color-sky)" },
+  { id: "notes", label: "Notes", hue: "var(--color-lemon)" },
+  { id: "files", label: "Attachments", hue: "var(--color-lilac)" },
+  { id: "crm", label: "CRM", hue: "var(--color-lavender)" },
+  { id: "customers", label: "Customers", hue: "var(--color-mint)" },
 ];
+
+function subscribeHash(cb: () => void) {
+  window.addEventListener("hashchange", cb);
+  return () => window.removeEventListener("hashchange", cb);
+}
+function setHashTab(t: Tab) {
+  window.location.hash = t;
+}
+function readHashTab(): Tab | null {
+  const h = window.location.hash.replace(/^#/, "");
+  return NAV.some((n) => n.id === h) ? (h as Tab) : null;
+}
 
 const PRI: ReminderPriority[] = ["low", "medium", "high"];
 const PRI_LABEL: Record<ReminderPriority, string> = { high: "HIGH", medium: "MED", low: "LOW" };
 
 function priColor(p: ReminderPriority) {
-  return p === "high" ? "var(--color-primary)" : p === "medium" ? "var(--color-amber)" : "var(--color-muted)";
+  return p === "high" ? "var(--color-danger)" : p === "medium" ? "var(--color-amber)" : "var(--color-muted)";
 }
 
 function fileKind(name: string, mime: string) {
   const ext = name.split(".").pop()?.toUpperCase() || "FILE";
   const m = mime.toLowerCase();
-  if (m.includes("pdf") || ext === "PDF") return { label: "PDF", color: "var(--color-primary)" };
+  if (m.includes("pdf") || ext === "PDF") return { label: "PDF", color: "var(--color-danger)" };
   if (ext === "XLSX" || ext === "XLS" || m.includes("spreadsheet")) return { label: "XLSX", color: "var(--color-green)" };
-  if (ext === "CSV") return { label: "CSV", color: "var(--color-teal)" };
-  if (ext === "DOCX" || ext === "DOC") return { label: "DOCX", color: "var(--color-accent)" };
+  if (ext === "CSV") return { label: "CSV", color: "var(--color-accent)" };
+  if (ext === "DOCX" || ext === "DOC") return { label: "DOCX", color: "var(--color-sky)" };
   if (ext === "ZIP") return { label: "ZIP", color: "var(--color-amber)" };
-  if (ext === "MP4" || m.startsWith("video/")) return { label: "MP4", color: "var(--color-lilac)" };
-  if (m.startsWith("image/")) return { label: ext.slice(0, 4) || "IMG", color: "var(--color-violet)" };
+  if (ext === "MP4" || m.startsWith("video/")) return { label: "MP4", color: "var(--color-violet)" };
+  if (m.startsWith("image/")) return { label: ext.slice(0, 4) || "IMG", color: "var(--color-lilac)" };
   return { label: ext.slice(0, 4) || "FILE", color: "var(--color-muted)" };
 }
 
@@ -49,129 +63,108 @@ function fmtBytes(n: number) {
 
 export default function Dashboard({ lockable = false }: { lockable?: boolean }) {
   const store = useAsukaStore();
-  const [tab, setTab] = useState<Tab>("overview");
-  const [collapsed, setCollapsed] = useState(false);
+  // Section = URL hash (#customers etc.). Server snapshot is null so hydration always starts on Overview.
+  const tab = useSyncExternalStore(subscribeHash, readHashTab, () => null) ?? "overview";
   const [monthOffset, setMonthOffset] = useState(0);
 
   const today = localToday();
   const openReminders = store.reminders.filter((r) => !r.done);
   const dueToday = openReminders.filter((r) => r.dueAt === today);
   const pipeline = store.leads.filter((l) => l.stage !== "lost" && l.stage !== "closed_won");
+  const title = NAV.find((n) => n.id === tab)?.label ?? "Overview";
+
+  function go(t: Tab) {
+    if (t === tab) return;
+    setHashTab(t); // the hash is the section's source of truth (deep-linkable, back button works)
+    haptic("tap");
+  }
+
+  const syncText = store.syncError
+    ? `Sync error · ${store.syncError}`
+    : store.syncedAt
+      ? `Synced ${new Date(store.syncedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+      : store.hydrated
+        ? "Local only"
+        : "Loading";
 
   return (
-    <div className="app-bg" style={{ display: "flex", minHeight: "100vh", color: "var(--color-text)" }}>
-      <aside
-        style={{
-          width: collapsed ? 60 : 220,
-          flexShrink: 0,
-          background: "var(--color-surface)",
-          borderRight: "1px solid var(--color-border)",
-          display: "flex",
-          flexDirection: "column",
-          transition: "width 0.18s ease",
-        }}
-      >
-        <div style={{ height: 56, display: "flex", alignItems: "center", gap: 10, padding: "0 14px", borderBottom: "1px solid var(--color-border)" }}>
-          {/* eslint-disable-next-line @next/next/no-img-element -- static pixel-art brand mark, no optimisation wanted */}
-          <img src="/icons/icon-64.png" alt="" width={32} height={32} className="pixel" style={{ borderRadius: 8, flexShrink: 0, boxShadow: `0 0 0 1px ${tint("var(--color-primary)", 45)}` }} />
-          {!collapsed && (
-            <div style={{ overflow: "hidden" }}>
-              <div style={{ fontSize: 10, letterSpacing: "0.18em", color: "var(--color-primary)", fontFamily: "var(--font-geist-mono), var(--font-mono)", whiteSpace: "nowrap" }}>ASUKA · GROKBOT</div>
-              <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>Central Dogma</div>
+    <div className="stage">
+      <div className="window">
+        <header className="topbar">
+          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+            {/* eslint-disable-next-line @next/next/no-img-element -- static pixel-art brand mark, no optimisation wanted */}
+            <img src="/icons/icon-64.png" alt="" width={36} height={36} className="pixel brand-mark" aria-hidden="true" />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 600, lineHeight: 1.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Central Dogma</div>
+              <div style={{ fontSize: 12, color: "var(--color-muted)", whiteSpace: "nowrap" }}>Asuka Langley · v2.4.1 · live SMS sync</div>
             </div>
-          )}
-        </div>
-        <nav style={{ padding: 10, display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
-          {NAV.map((item) => {
-            const on = tab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => setTab(item.id)}
-                title={item.label}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "9px 12px",
-                  borderRadius: 7,
-                  border: `1px solid ${on ? tint(item.hue, 45) : "transparent"}`,
-                  background: on ? tint(item.hue, 11) : "transparent",
-                  color: on ? item.hue : "var(--color-muted)",
-                  cursor: "pointer",
-                  textAlign: "left",
-                }}
-              >
-                <span style={{ width: 20, textAlign: "center", flexShrink: 0, color: on ? item.hue : `color-mix(in srgb, ${item.hue} 55%, var(--color-muted))` }}>{item.icon}</span>
-                {!collapsed && <span style={{ fontSize: 13, fontWeight: 500, letterSpacing: "0.02em" }}>{item.label}</span>}
-              </button>
-            );
-          })}
-        </nav>
-        <div style={{ padding: 10, borderTop: "1px solid var(--color-border)" }}>
-          <button
-            onClick={() => setCollapsed((c) => !c)}
-            className="btn"
-            style={{ width: "100%", padding: "8px 10px", color: "var(--color-muted)" }}
-          >
-            {collapsed ? "»" : "« collapse"}
-          </button>
-        </div>
-      </aside>
-
-      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-        <header style={{ height: 56, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px", borderBottom: "1px solid var(--color-border)", background: "var(--color-surface)" }}>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>Central Dogma</div>
-            <div style={{ fontSize: 11, fontFamily: "var(--font-geist-mono), var(--font-mono)", color: "var(--color-muted)" }}>Asuka Langley · v2.4.1 · live SMS sync</div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11 }}>
-              <span className="dot-live" style={store.syncError ? { background: "var(--color-primary)", boxShadow: "0 0 8px var(--color-primary)" } : undefined} />
-              {store.syncError
-                ? `SYNC ERROR · ${store.syncError}`
-                : store.syncedAt
-                  ? `SYNCED ${new Date(store.syncedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
-                  : store.hydrated
-                    ? "LOCAL"
-                    : "LOADING"}
-            </div>
-            <button onClick={store.exportJson} className="btn" style={{ padding: "7px 12px" }}>EXPORT</button>
-            <label className="btn" style={{ padding: "7px 12px", cursor: "pointer" }}>
-              IMPORT
-              <input type="file" accept="application/json" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) store.importJson(f); e.target.value = ""; }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
+            <span className="sync-pill" title={syncText} role="status" aria-live="polite">
+              <span className={`dot-live${store.syncError ? " error" : ""}`} />
+              {syncText}
+            </span>
+            <button type="button" onClick={store.exportJson} className="btn">Export</button>
+            <label className="btn" style={{ cursor: "pointer" }}>
+              Import
+              <input type="file" accept="application/json" className="sr-only" onChange={(e) => { const f = e.target.files?.[0]; if (f) store.importJson(f); e.target.value = ""; }} />
             </label>
             {lockable && (
               <form method="post" action="/api/logout" style={{ display: "contents" }}>
-                <button className="btn" style={{ padding: "7px 12px", color: "var(--color-muted)" }} title="Lock this board (sign out)">LOCK</button>
+                <button className="btn btn-ghost" title="Lock this board (sign out)">Lock</button>
               </form>
             )}
           </div>
         </header>
 
-        <main style={{ flex: 1, padding: 24, overflow: "auto" }}>
+        <nav className="dock" aria-label="Sections">
+          {NAV.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className="dock-item"
+              aria-current={tab === item.id ? "page" : undefined}
+              onClick={() => go(item.id)}
+              style={{ ["--color-primary" as string]: item.hue }}
+            >
+              <Icon name={item.id} />
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+
+        <main className="content">
           {!store.hydrated ? (
-            <p style={{ color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 12 }}>Loading Central Dogma…</p>
-          ) : tab === "overview" ? (
-            <Overview store={store} dueToday={dueToday} openReminders={openReminders} pipeline={pipeline} setTab={setTab} />
-          ) : tab === "reminders" ? (
-            <Reminders store={store} />
-          ) : tab === "calendar" ? (
-            <CalendarView
-              reminders={store.reminders}
-              leads={store.leads}
-              monthOffset={monthOffset}
-              setMonthOffset={setMonthOffset}
-              onToggle={(id) => store.toggleReminder(id)}
-            />
-          ) : tab === "notes" ? (
-            <Notes store={store} />
-          ) : tab === "files" ? (
-            <Attachments store={store} />
-          ) : tab === "customers" ? (
-            <Customers store={store} />
+            <p style={{ color: "var(--color-muted)", margin: 0 }}>Loading Central Dogma…</p>
           ) : (
-            <Crm store={store} />
+            <>
+              {tab !== "customers" && (
+                <div className="page-head">
+                  <h1 className="page-title">{title}</h1>
+                </div>
+              )}
+              {tab === "overview" ? (
+                <Overview store={store} dueToday={dueToday} openReminders={openReminders} pipeline={pipeline} setTab={go} />
+              ) : tab === "reminders" ? (
+                <Reminders store={store} />
+              ) : tab === "calendar" ? (
+                <CalendarView
+                  reminders={store.reminders}
+                  leads={store.leads}
+                  monthOffset={monthOffset}
+                  setMonthOffset={setMonthOffset}
+                  onToggle={(id) => store.toggleReminder(id)}
+                />
+              ) : tab === "notes" ? (
+                <Notes store={store} />
+              ) : tab === "files" ? (
+                <Attachments store={store} />
+              ) : tab === "customers" ? (
+                <Customers store={store} />
+              ) : (
+                <Crm store={store} />
+              )}
+            </>
           )}
         </main>
       </div>
@@ -184,7 +177,7 @@ function Spark({ n, max = 8, color = "var(--color-accent)" }: { n: number; max?:
   return (
     <div style={{ display: "flex", gap: 2, alignItems: "flex-end", height: 18 }}>
       {bars.map((on, i) => (
-        <div key={i} style={{ width: 6, height: 6 + (on ? (i + 1) * 1.4 : 4), background: on ? color : tint("var(--color-text)", 7), borderRadius: 1 }} />
+        <div key={i} style={{ width: 6, height: 6 + (on ? (i + 1) * 1.4 : 4), background: on ? color : "rgba(255,255,255,0.08)", borderRadius: 1 }} />
       ))}
     </div>
   );
@@ -206,7 +199,7 @@ function Overview({ store, dueToday, openReminders, pipeline, setTab }: { store:
       rows.push({ t: r.createdAt, type: r.done ? "DONE" : "TASK", color: r.done ? "var(--color-teal)" : priColor(r.priority), label: r.title });
     }
     for (const l of store.leads) {
-      rows.push({ t: l.createdAt, type: "LEAD", color: "var(--color-accent)", label: `${l.name} · ${l.company || "no org"}` });
+      rows.push({ t: l.createdAt, type: "LEAD", color: "var(--color-sky)", label: `${l.name} · ${l.company || "no org"}` });
       for (const n of l.noteLog) {
         rows.push({ t: n.createdAt, type: "NOTE", color: "var(--color-violet)", label: `${l.name} — ${n.body.length > 90 ? n.body.slice(0, 90) + "…" : n.body}` });
       }
@@ -220,49 +213,49 @@ function Overview({ store, dueToday, openReminders, pipeline, setTab }: { store:
   }, [store.reminders, store.leads, store.customers]);
 
   const tiles = [
-    { l: "DUE TODAY", v: dueToday.length, d: store.remindersSource === "google" ? "Google Tasks" : "SMS + board", t: "reminders" as Tab, hue: "var(--color-primary)" },
-    { l: "OPEN TASKS", v: openReminders.length, d: "until resolved", t: "reminders" as Tab, hue: "var(--color-amber)" },
-    { l: "PIPELINE", v: pipeline.length, d: "active leads", t: "crm" as Tab, hue: "var(--color-accent)" },
+    { l: "DUE TODAY", v: dueToday.length, d: store.remindersSource === "google" ? "Google Tasks" : "SMS + board", t: "reminders" as Tab, hue: "var(--color-rose)" },
+    { l: "OPEN TASKS", v: openReminders.length, d: "until resolved", t: "reminders" as Tab, hue: "var(--color-apricot)" },
+    { l: "PIPELINE", v: pipeline.length, d: "active leads", t: "crm" as Tab, hue: "var(--color-sky)" },
     { l: "APPTS SET", v: apptsSet, d: apptsToday.length ? `${apptsToday.length} today` : "on the calendar", t: "crm" as Tab, hue: "var(--color-violet)" },
-    { l: "CUSTOMERS", v: store.customers.length, d: monthRevenue ? `${money(monthRevenue)} this month` : "paying clients", t: "customers" as Tab, hue: "var(--color-green)" },
+    { l: "CUSTOMERS", v: store.customers.length, d: monthRevenue ? `${money(monthRevenue)} this month` : "paying clients", t: "customers" as Tab, hue: "var(--color-mint)" },
     { l: "NOTES", v: store.notes.length, d: "pinned + free", t: "notes" as Tab, hue: "var(--color-lemon)" },
     { l: "FILES", v: store.attachments.length, d: "local vault", t: "files" as Tab, hue: "var(--color-lilac)" },
   ];
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
+      <div className="tiles">
         {tiles.map((c) => (
-          <button key={c.l} onClick={() => setTab(c.t)} className="card" style={{ padding: 16, textAlign: "left", cursor: "pointer", boxShadow: `inset 0 2px 0 0 ${tint(c.hue, 70)}` }}>
-            <div style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 28, fontWeight: 500, letterSpacing: "-0.03em", color: c.hue }}>{c.v}</div>
-            <div style={{ marginTop: 6, fontSize: 10, letterSpacing: "0.14em", color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)" }}>{c.l}</div>
-            <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
-              <span style={{ fontSize: 11, color: `color-mix(in srgb, ${c.hue} 80%, var(--color-muted))`, fontFamily: "var(--font-geist-mono), var(--font-mono)" }}>{c.d}</span>
+          <button key={c.l} type="button" onClick={() => setTab(c.t)} className="card" style={{ padding: 16, textAlign: "left", cursor: "pointer", transition: "border-color 200ms, background-color 200ms", boxShadow: `inset 0 2px 0 0 ${tint(c.hue, 70)}, inset 0 1px 0 rgba(255,255,255,0.06)` }}>
+            <div className="total" style={{ color: c.hue }}>{c.v}</div>
+            <div className="label" style={{ marginTop: 6 }}>{c.l}</div>
+            <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 8 }}>
+              <span style={{ fontSize: 13, color: `color-mix(in srgb, ${c.hue} 80%, var(--color-muted))` }}>{c.d}</span>
               <Spark n={c.v} color={c.hue} />
             </div>
           </button>
         ))}
       </div>
-      <div style={{ display: "grid", gap: 16, gridTemplateColumns: "1.2fr 1fr" }}>
+      <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(min(340px, 100%), 1fr))" }}>
         <section className="card" style={{ padding: 18 }}>
-          <h2 style={{ fontSize: 11, letterSpacing: "0.16em", color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)", marginBottom: 12 }}>ACTIVITY</h2>
+          <h2 className="card-title">Activity</h2>
           {activity.length === 0 && <p style={{ color: "var(--color-muted)", fontSize: 13 }}>No activity yet.</p>}
           {activity.map((a, i) => (
-            <div key={i} style={{ display: "grid", gridTemplateColumns: "72px 64px 1fr", gap: 10, padding: "8px 0", borderTop: i ? "1px solid var(--color-border)" : "none", fontSize: 12 }}>
-              <span style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", color: "var(--color-muted)" }}>{a.t ? new Date(a.t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "—"}</span>
-              <span style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", color: a.color }}>{a.type}</span>
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "72px 56px minmax(0, 1fr)", gap: 10, padding: "8px 0", borderTop: i ? "1px solid var(--color-border)" : "none", fontSize: 14 }}>
+              <span style={{ color: "var(--color-muted)" }}>{a.t ? new Date(a.t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "—"}</span>
+              <span style={{ color: a.color }}>{a.type}</span>
               <span>{a.label}</span>
             </div>
           ))}
         </section>
         <section className="card" style={{ padding: 18 }}>
-          <h2 style={{ fontSize: 11, letterSpacing: "0.16em", color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)", marginBottom: 12 }}>TODAY · SCHEDULE</h2>
+          <h2 className="card-title">Today</h2>
           {schedule.length === 0 && apptsToday.length === 0 && <p style={{ color: "var(--color-muted)", fontSize: 13 }}>Nothing due today.</p>}
           {apptsToday.map((l) => (
             <div key={l.id} style={{ display: "flex", gap: 12, padding: "10px 0", borderTop: "1px solid var(--color-border)" }}>
               <div style={{ width: 3, borderRadius: 2, background: "var(--color-violet)" }} />
               <div>
-                <div style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11, color: "var(--color-violet)" }}>{apptTime(l.appointmentAt ?? "")} · APPOINTMENT</div>
+                <div style={{ fontSize: 13, color: "var(--color-violet)" }}>{apptTime(l.appointmentAt ?? "")} · APPOINTMENT</div>
                 <div style={{ fontSize: 13 }}>{l.name}{l.company ? ` · ${l.company}` : ""}</div>
               </div>
             </div>
@@ -271,7 +264,7 @@ function Overview({ store, dueToday, openReminders, pipeline, setTab }: { store:
             <div key={r.id} style={{ display: "flex", gap: 12, padding: "10px 0", borderTop: "1px solid var(--color-border)" }}>
               <div style={{ width: 3, borderRadius: 2, background: priColor(r.priority) }} />
               <div>
-                <div style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11, color: "var(--color-accent)" }}>{r.time || "09:30"}</div>
+                <div style={{ fontSize: 13, color: "var(--color-accent)" }}>{r.time || "09:30"}</div>
                 <div style={{ fontSize: 13 }}>{r.title}</div>
               </div>
             </div>
@@ -279,14 +272,14 @@ function Overview({ store, dueToday, openReminders, pipeline, setTab }: { store:
         </section>
       </div>
       <section className="card" style={{ padding: 18 }}>
-        <h2 style={{ fontSize: 11, letterSpacing: "0.16em", color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)", marginBottom: 12 }}>PRIORITY QUEUE</h2>
+        <h2 className="card-title">Priority queue</h2>
         {high.length === 0 && <p style={{ color: "var(--color-muted)", fontSize: 13 }}>No high-priority open items.</p>}
         {high.map((r) => (
           <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: "1px solid var(--color-border)" }}>
-            <span style={{ width: 8, height: 8, borderRadius: 2, background: "var(--color-primary)" }} />
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: "var(--color-danger)", flexShrink: 0 }} />
             <span style={{ flex: 1 }}>{r.title}</span>
-            <span style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11, color: "var(--color-primary)" }}>HIGH</span>
-            <span style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11, color: "var(--color-muted)" }}>{r.dueAt}{r.time ? ` ${r.time}` : ""}</span>
+            <span style={{ fontSize: 12, fontWeight: 500, color: "var(--color-danger)" }}>HIGH</span>
+            <span style={{ fontSize: 13, color: "var(--color-muted)" }}>{r.dueAt}{r.time ? ` ${r.time}` : ""}</span>
           </div>
         ))}
       </section>
@@ -301,18 +294,19 @@ function Reminders({ store }: { store: Store }) {
   const [time, setTime] = useState("");
   const [priority, setPriority] = useState<ReminderPriority>("medium");
   const [notes, setNotes] = useState("");
+  // Manual by default: only reminders tagged "asuka" can be swept by her full sync.
   const [source, setSource] = useState<"asuka" | "manual">("manual");
   const list = store.reminders.filter((r) => (filter === "all" ? true : filter === "done" ? r.done : !r.done));
   const google = store.remindersSource === "google";
-  const badgeColor = store.remindersError ? "var(--color-primary)" : google ? "var(--color-green)" : "var(--color-muted)";
+  const badgeColor = store.remindersError ? "var(--color-danger)" : google ? "var(--color-mint)" : "var(--color-muted)";
   const badge = store.remindersError
-    ? "GOOGLE TASKS · ERROR"
+    ? "Google Tasks · error"
     : google
-      ? `GOOGLE TASKS · ${(store.remindersList || "").toUpperCase()}`
-      : "LOCAL VAULT · GOOGLE TASKS NOT CONNECTED";
+      ? `Google Tasks · ${store.remindersList || ""}`
+      : "Local vault · Google Tasks not connected";
 
   return (
-    <div style={{ display: "grid", gap: 16, gridTemplateColumns: "320px 1fr" }}>
+    <div className="split split-left" style={{ ["--split-w" as string]: "320px" }}>
       <form
         className="card"
         style={{ padding: 18, height: "fit-content", display: "grid", gap: 10 }}
@@ -322,14 +316,15 @@ function Reminders({ store }: { store: Store }) {
           store.addReminder({ id: uid("r"), title: title.trim(), notes, dueAt, time: time || undefined, priority, done: false, createdAt: new Date().toISOString(), source });
           setTitle("");
           setNotes("");
+          haptic("save");
         }}
       >
-        <h2 style={{ fontSize: 11, letterSpacing: "0.16em", color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)" }}>NEW REMINDER</h2>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task" style={inp} />
-        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Context" style={{ ...inp, height: 80 }} />
+        <h2 className="card-title" style={{ marginBottom: 0 }}>New reminder</h2>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task" className="input" />
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Context" className="input" style={{ height: 80 }} />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <input type="date" value={dueAt} onChange={(e) => setDueAt(e.target.value)} style={inp} />
-          <input type="time" value={time} onChange={(e) => setTime(e.target.value)} style={inp} />
+          <input type="date" value={dueAt} onChange={(e) => setDueAt(e.target.value)} className="input" />
+          <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="input" />
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           {PRI.map((p) => (
@@ -337,7 +332,7 @@ function Reminders({ store }: { store: Store }) {
           ))}
         </div>
         <div style={{ display: "flex", gap: 6 }}>
-          <button type="button" onClick={() => setSource("asuka")} className="btn" style={{ padding: "6px 10px", background: source === "asuka" ? "var(--color-primary)" : "transparent", borderColor: source === "asuka" ? "var(--color-primary)" : "var(--color-border)", color: source === "asuka" ? "var(--color-ink)" : "var(--color-muted)" }}>ASUKA</button>
+          <button type="button" onClick={() => setSource("asuka")} className={`btn${source === "asuka" ? " btn-primary" : ""}`} aria-pressed={source === "asuka"}>ASUKA</button>
           <button type="button" onClick={() => setSource("manual")} className="btn" style={{ padding: "6px 10px", color: source === "manual" ? "var(--color-accent)" : "var(--color-muted)", borderColor: source === "manual" ? "var(--color-accent)" : "var(--color-border)" }}>MANUAL</button>
         </div>
         <button className="btn btn-primary" style={{ padding: 10 }}>ADD</button>
@@ -345,28 +340,28 @@ function Reminders({ store }: { store: Store }) {
       <div>
         <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
           {(["all", "active", "done"] as const).map((f) => (
-            <button key={f} onClick={() => setFilter(f)} className="btn" style={{ padding: "6px 12px", color: filter === f ? "var(--color-ink)" : "var(--color-muted)", background: filter === f ? "var(--color-amber)" : "transparent", borderColor: filter === f ? "var(--color-amber)" : "var(--color-border)" }}>{f.toUpperCase()}</button>
+            <button key={f} type="button" onClick={() => setFilter(f)} className={`btn${filter === f ? " btn-primary" : ""}`} aria-pressed={filter === f}>{f.toUpperCase()}</button>
           ))}
-          <span title={store.remindersError || (google ? "Reminders are read from and written to this Google Tasks list" : "Set the GOOGLE_* env vars to back reminders with Google Tasks")} style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 10, letterSpacing: "0.12em", color: badgeColor }}>
+          <span className="label" title={store.remindersError || (google ? "Reminders are read from and written to this Google Tasks list" : "Set the GOOGLE_* env vars to back reminders with Google Tasks")} style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, color: badgeColor }}>
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: badgeColor, boxShadow: `0 0 6px ${badgeColor}` }} />
             {badge}
           </span>
         </div>
         {store.remindersError && (
-          <p style={{ margin: "0 0 12px", fontSize: 11, fontFamily: "var(--font-geist-mono), var(--font-mono)", color: "var(--color-primary)" }}>{store.remindersError}</p>
+          <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--color-danger)" }}>{store.remindersError}</p>
         )}
         {google && store.remindersPending > 0 && (
-          <div className="card" style={{ padding: "12px 14px", marginBottom: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", borderColor: tint("var(--color-amber)", 45), background: tint("var(--color-amber)", 6) }}>
-            <span style={{ fontSize: 13 }}>
-              <span style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", color: "var(--color-amber)" }}>{store.remindersPending}</span>
+          <div className="card" style={{ padding: "12px 14px", marginBottom: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", borderColor: tint("var(--color-amber)", 45), background: tint("var(--color-amber)", 8) }}>
+            <span style={{ fontSize: 14 }}>
+              <span style={{ fontWeight: 600, color: "var(--color-amber)" }}>{store.remindersPending}</span>
               {store.remindersPending === 1 ? " reminder" : " reminders"} from before Google Tasks was connected {store.remindersPending === 1 ? "isn't" : "aren't"} in the list yet.
             </span>
             <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-              <button type="button" className="btn" disabled={store.remindersBusy} onClick={store.migrateVaultReminders} style={{ padding: "6px 10px", background: "var(--color-amber)", borderColor: "var(--color-amber)", color: "var(--color-ink)", fontWeight: 500, opacity: store.remindersBusy ? 0.6 : 1 }}>
-                {store.remindersBusy ? "MOVING…" : "MOVE TO GOOGLE TASKS"}
+              <button type="button" className="btn" disabled={store.remindersBusy} onClick={store.migrateVaultReminders} style={{ background: "var(--color-amber)", borderColor: "var(--color-amber)", color: "var(--color-on-primary)" }}>
+                {store.remindersBusy ? "Moving…" : "Move to Google Tasks"}
               </button>
-              <button type="button" className="btn" disabled={store.remindersBusy} onClick={() => { if (window.confirm(`Discard ${store.remindersPending} old vault reminder${store.remindersPending === 1 ? "" : "s"}? They will not be moved to Google Tasks.`)) store.discardVaultReminders(); }} style={{ padding: "6px 10px", color: "var(--color-muted)" }}>
-                DISCARD
+              <button type="button" className="btn btn-ghost" disabled={store.remindersBusy} onClick={() => { if (window.confirm(`Discard ${store.remindersPending} old vault reminder${store.remindersPending === 1 ? "" : "s"}? They will not be moved to Google Tasks.`)) store.discardVaultReminders(); }}>
+                Discard
               </button>
             </span>
           </div>
@@ -382,13 +377,13 @@ function Reminders({ store }: { store: Store }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <span style={{ fontWeight: 500 }}>{r.title}</span>
-                <span style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 10, color: priColor(r.priority) }}>{PRI_LABEL[r.priority]}</span>
-                <span style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 10, color: "var(--color-muted)" }}>{r.source.toUpperCase()}</span>
+                <span style={{ fontSize: 12, fontWeight: 500, color: priColor(r.priority) }}>{PRI_LABEL[r.priority]}</span>
+                <span style={{ fontSize: 12, fontWeight: 500, color: "var(--color-muted)" }}>{r.source.toUpperCase()}</span>
               </div>
               {r.notes && <p style={{ marginTop: 4, fontSize: 13, color: "var(--color-muted)" }}>{r.notes}</p>}
-              <p style={{ marginTop: 6, fontSize: 11, fontFamily: "var(--font-geist-mono), var(--font-mono)", color: r.dueAt ? "var(--color-accent)" : "var(--color-muted)" }}>{r.dueAt || "no date"}{r.time ? ` · ${r.time}` : ""}</p>
+              <p style={{ marginTop: 6, fontSize: 13, color: r.dueAt ? "var(--color-accent)" : "var(--color-muted)" }}>{r.dueAt || "no date"}{r.time ? ` · ${r.time}` : ""}</p>
             </div>
-            <button onClick={() => store.removeReminder(r.id)} className="btn" style={{ padding: "5px 8px", color: "var(--color-primary)" }}>REMOVE</button>
+            <button type="button" onClick={() => store.removeReminder(r.id)} className="btn btn-danger" style={{ flexShrink: 0 }}>Remove</button>
           </div>
         ))}
       </div>
@@ -423,14 +418,14 @@ function CalendarView({ reminders, leads, monthOffset, setMonthOffset, onToggle 
   const today = localToday();
 
   return (
-    <div style={{ display: "grid", gap: 16, gridTemplateColumns: "1fr 280px" }}>
+    <div className="split" style={{ ["--split-w" as string]: "300px" }}>
       <div className="card" style={{ padding: 18 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <button className="btn" style={{ padding: "6px 10px" }} onClick={() => setMonthOffset((n) => n - 1)}>←</button>
-          <h2 style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 13, letterSpacing: "0.08em" }}>{view.label.toUpperCase()}</h2>
+          <h2 className="card-title" style={{ margin: 0 }}>{view.label}</h2>
           <button className="btn" style={{ padding: "6px 10px" }} onClick={() => setMonthOffset((n) => n + 1)}>→</button>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, textAlign: "center", fontSize: 10, letterSpacing: "0.12em", color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)", marginBottom: 6 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, textAlign: "center", fontSize: 12, fontWeight: 500, letterSpacing: "0.06em", color: "var(--color-muted)", marginBottom: 6 }}>
           {["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].map((d) => <div key={d} style={{ padding: 6 }}>{d}</div>)}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
@@ -442,8 +437,8 @@ function CalendarView({ reminders, leads, monthOffset, setMonthOffset, onToggle 
             const isToday = iso === today;
             const isSel = iso === selected;
             return (
-              <button key={iso} onClick={() => setSelected(iso)} style={{ minHeight: 72, borderRadius: 8, border: `1px solid ${isSel ? "var(--color-accent)" : isToday ? tint("var(--color-accent)", 45) : "var(--color-border)"}`, background: isSel ? tint("var(--color-accent)", 10) : isToday ? tint("var(--color-accent)", 4) : "transparent", padding: 6, textAlign: "left", cursor: "pointer", color: "inherit" }}>
-                <div style={{ fontSize: 11, fontFamily: "var(--font-geist-mono), var(--font-mono)", color: isToday ? "var(--color-accent)" : "var(--color-muted)" }}>{day}</div>
+              <button key={iso} type="button" onClick={() => setSelected(iso)} className="cal-cell" aria-pressed={isSel} style={{ borderRadius: 12, border: `1px solid ${isSel ? "var(--color-selected-edge)" : isToday ? "rgba(113,218,202,0.55)" : "var(--color-border)"}`, background: isSel ? "var(--color-selected)" : "transparent", padding: 6, textAlign: "left", cursor: "pointer", color: "inherit", minWidth: 0, transition: "background-color 200ms, border-color 200ms" }}>
+                <div style={{ fontSize: 13, color: isToday ? "var(--color-accent)" : "var(--color-muted)" }}>{day}</div>
                 <div style={{ display: "flex", gap: 3, marginTop: 6, flexWrap: "wrap" }}>
                   {appts.slice(0, 4).map((l) => <span key={l.id} title={`${apptTime(l.appointmentAt ?? "")} ${l.name}`} style={{ width: 6, height: 6, borderRadius: 1, background: "var(--color-violet)" }} />)}
                   {items.slice(0, 4).map((r) => <span key={r.id} style={{ width: 6, height: 6, borderRadius: "50%", background: r.done ? "var(--color-muted)" : priColor(r.priority) }} />)}
@@ -452,24 +447,24 @@ function CalendarView({ reminders, leads, monthOffset, setMonthOffset, onToggle 
             );
           })}
         </div>
-        <div style={{ display: "flex", gap: 14, marginTop: 10, fontSize: 10, letterSpacing: "0.1em", color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)" }}>
+        <div style={{ display: "flex", gap: 14, marginTop: 10, fontSize: 12, fontWeight: 500, letterSpacing: "0.06em", color: "var(--color-muted)" }}>
           <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: 1, background: "var(--color-violet)" }} />APPOINTMENT</span>
           <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-amber)" }} />REMINDER</span>
         </div>
       </div>
       <aside className="card" style={{ padding: 18 }}>
-        <h2 style={{ fontSize: 11, letterSpacing: "0.16em", color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)", marginBottom: 12 }}>{selected || "DAY"}</h2>
+        <h2 className="card-title">{selected || "Day"}</h2>
         {detail.length === 0 && detailAppts.length === 0 && <p style={{ color: "var(--color-muted)", fontSize: 13 }}>No events this day.</p>}
         {detailAppts.map((l) => (
           <div key={l.id} style={{ padding: "10px 0", borderTop: "1px solid var(--color-border)" }}>
-            <div style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11, color: "var(--color-violet)" }}>{apptTime(l.appointmentAt ?? "")} · APPOINTMENT</div>
+            <div style={{ fontSize: 13, color: "var(--color-violet)" }}>{apptTime(l.appointmentAt ?? "")} · APPOINTMENT</div>
             <div>{l.name}</div>
-            <div style={{ fontSize: 11, color: "var(--color-muted)" }}>{l.company || "—"}</div>
+            <div style={{ fontSize: 13, color: "var(--color-muted)" }}>{l.company || "—"}</div>
           </div>
         ))}
         {detail.map((r) => (
           <button key={r.id} onClick={() => onToggle(r.id)} style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: "inherit", cursor: "pointer", padding: "10px 0", borderTop: "1px solid var(--color-border)" }}>
-            <div style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11, color: "var(--color-accent)" }}>{r.time || "all-day"} · {PRI_LABEL[r.priority]}</div>
+            <div style={{ fontSize: 13, color: "var(--color-accent)" }}>{r.time || "all-day"} · {PRI_LABEL[r.priority]}</div>
             <div style={{ textDecoration: r.done ? "line-through" : "none" }}>{r.title}</div>
           </button>
         ))}
@@ -487,12 +482,12 @@ function Notes({ store }: { store: Store }) {
   const active = store.notes.find((n) => n.id === sel) || null;
 
   return (
-    <div style={{ display: "grid", gap: 16, gridTemplateColumns: "320px 1fr" }}>
-      <div className="card" style={{ padding: 14, display: "flex", flexDirection: "column", minHeight: 480 }}>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search notes" style={{ ...inp, marginBottom: 10 }} />
+    <div className="split split-left" style={{ ["--split-w" as string]: "320px" }}>
+      <div className="card" style={{ padding: 14, display: "flex", flexDirection: "column", minHeight: 320 }}>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search notes" className="input" style={{ marginBottom: 10 }} />
         <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
-          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="New title" style={inp} />
-          <textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="Body" style={{ ...inp, height: 70 }} />
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="New title" className="input" />
+          <textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="Body" className="input" style={{ height: 70 }} />
           <button
             className="btn btn-primary"
             style={{ padding: 8 }}
@@ -508,9 +503,9 @@ function Notes({ store }: { store: Store }) {
         </div>
         <div style={{ overflow: "auto", flex: 1 }}>
           {filtered.sort((a, b) => Number(b.pinned) - Number(a.pinned)).map((n) => (
-            <button key={n.id} onClick={() => setSel(n.id)} style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 8px", borderRadius: 7, border: `1px solid ${n.id === sel ? tint("var(--color-lemon)", 45) : "transparent"}`, background: n.id === sel ? tint("var(--color-lemon)", 8) : "transparent", color: "inherit", cursor: "pointer" }}>
-              <div style={{ fontSize: 13, fontWeight: 500 }}>{n.pinned ? <span style={{ color: "var(--color-lemon)" }}>★ </span> : ""}{n.title}</div>
-              <div style={{ fontSize: 11, color: "var(--color-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.body}</div>
+            <button key={n.id} type="button" onClick={() => setSel(n.id)} aria-pressed={n.id === sel} style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 10px", borderRadius: 12, border: n.id === sel ? "1px solid var(--color-selected-edge)" : "1px solid transparent", background: n.id === sel ? "var(--color-selected)" : "transparent", color: "inherit", cursor: "pointer", minWidth: 0, transition: "background-color 200ms, border-color 200ms" }}>
+              <div style={{ fontSize: 13, fontWeight: 500 }}>{n.pinned ? "★ " : ""}{n.title}</div>
+              <div style={{ fontSize: 13, color: "var(--color-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.body}</div>
             </button>
           ))}
         </div>
@@ -519,14 +514,14 @@ function Notes({ store }: { store: Store }) {
         {!active ? <p style={{ color: "var(--color-muted)" }}>Select a note.</p> : (
           <>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
-              <h2 style={{ fontSize: 18, fontWeight: 600 }}>{active.title}</h2>
+              <h2 className="card-title" style={{ margin: 0, minWidth: 0, overflowWrap: "anywhere" }}>{active.title}</h2>
               <div style={{ display: "flex", gap: 6 }}>
                 <button className="btn" style={{ padding: "6px 10px" }} onClick={() => store.setNotes((ns) => ns.map((x) => (x.id === active.id ? { ...x, pinned: !x.pinned, updatedAt: new Date().toISOString() } : x)))}>{active.pinned ? "UNPIN" : "PIN"}</button>
-                <button className="btn" style={{ padding: "6px 10px", color: "var(--color-primary)" }} onClick={() => { store.setNotes((ns) => ns.filter((x) => x.id !== active.id)); setSel(null); }}>DELETE</button>
+                <button type="button" className="btn btn-danger" onClick={() => { store.setNotes((ns) => ns.filter((x) => x.id !== active.id)); setSel(null); }}>Delete</button>
               </div>
             </div>
             <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.6, color: "var(--color-text)" }}>{active.body}</p>
-            <p style={{ marginTop: 16, fontSize: 11, color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)" }}>{new Date(active.updatedAt).toLocaleString()}</p>
+            <p style={{ marginTop: 16, fontSize: 13, color: "var(--color-muted)" }}>{new Date(active.updatedAt).toLocaleString()}</p>
           </>
         )}
       </div>
@@ -537,9 +532,9 @@ function Notes({ store }: { store: Store }) {
 function Attachments({ store }: { store: Store }) {
   return (
     <div>
-      <label className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, marginBottom: 16, cursor: "pointer", borderStyle: "dashed", borderColor: tint("var(--color-lilac)", 35) }}>
+      <label className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, marginBottom: 16, cursor: "pointer", borderStyle: "dashed" }}>
         <p style={{ fontWeight: 500 }}>Drop files or click to upload</p>
-        <p style={{ marginTop: 4, fontSize: 12, color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)" }}>STORED IN THIS BROWSER · SYNCED WITH VAULT JSON</p>
+        <p style={{ marginTop: 4, fontSize: 12, color: "var(--color-muted)" }}>STORED IN THIS BROWSER · SYNCED WITH VAULT JSON</p>
         <input type="file" multiple className="hidden" onChange={(e) => {
           const list = e.target.files; if (!list) return;
           Array.from(list).forEach((file) => {
@@ -550,25 +545,25 @@ function Attachments({ store }: { store: Store }) {
         }} />
       </label>
       <div className="card" style={{ overflow: "hidden" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "40px 1fr 70px 80px 120px 70px", gap: 8, padding: "10px 14px", fontSize: 10, letterSpacing: "0.12em", color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)", borderBottom: "1px solid var(--color-border)" }}>
+        <div className="rows label" style={{ ["--cols" as string]: "40px minmax(0, 1fr) 70px 80px 120px 80px", ["--cols-sm" as string]: "40px minmax(0, 1fr) 60px 72px", padding: "10px 14px", borderBottom: "1px solid var(--color-border)" }}>
           <span />
-          <span>NAME</span>
-          <span>TYPE</span>
-          <span>SIZE</span>
-          <span>DATE</span>
+          <span>Name</span>
+          <span>Type</span>
+          <span className="hide-sm">Size</span>
+          <span className="hide-sm">Date</span>
           <span />
         </div>
         {store.attachments.length === 0 && <p style={{ padding: 16, color: "var(--color-muted)" }}>No files yet.</p>}
         {store.attachments.map((a) => {
           const k = fileKind(a.name, a.mime);
           return (
-            <div key={a.id} style={{ display: "grid", gridTemplateColumns: "40px 1fr 70px 80px 120px 70px", gap: 8, padding: "10px 14px", alignItems: "center", borderTop: "1px solid var(--color-border)", fontSize: 13 }}>
-              <div style={{ width: 28, height: 28, borderRadius: 6, background: tint(k.color, 14), display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: k.color, fontFamily: "var(--font-geist-mono), var(--font-mono)" }}>{k.label.slice(0, 1)}</div>
+            <div key={a.id} className="rows" style={{ ["--cols" as string]: "40px minmax(0, 1fr) 70px 80px 120px 80px", ["--cols-sm" as string]: "40px minmax(0, 1fr) 60px 72px", padding: "10px 14px", borderTop: "1px solid var(--color-border)", fontSize: 15 }}>
+              <div style={{ width: 28, height: 28, borderRadius: 8, background: tint(k.color, 14), display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 600, color: k.color }}>{k.label.slice(0, 1)}</div>
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</span>
-              <span style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11, color: k.color }}>{k.label}</span>
-              <span style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11, color: "var(--color-muted)" }}>{fmtBytes(a.size)}</span>
-              <span style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11, color: "var(--color-muted)" }}>{a.createdAt.slice(0, 10)}</span>
-              <button onClick={() => store.setAttachments((as) => as.filter((x) => x.id !== a.id))} className="btn" style={{ padding: "4px 8px", color: "var(--color-primary)" }}>DEL</button>
+              <span style={{ fontSize: 13, color: k.color }}>{k.label}</span>
+              <span className="hide-sm" style={{ fontSize: 13, color: "var(--color-muted)" }}>{fmtBytes(a.size)}</span>
+              <span className="hide-sm" style={{ fontSize: 13, color: "var(--color-muted)" }}>{a.createdAt.slice(0, 10)}</span>
+              <button type="button" onClick={() => store.setAttachments((as) => as.filter((x) => x.id !== a.id))} className="btn btn-danger" style={{ minHeight: 32, padding: "6px 10px" }}>Del</button>
             </div>
           );
         })}
@@ -576,13 +571,3 @@ function Attachments({ store }: { store: Store }) {
     </div>
   );
 }
-
-const inp: CSSProperties = {
-  width: "100%",
-  borderRadius: 7,
-  border: "1px solid var(--color-border)",
-  background: "var(--color-bg)",
-  padding: "8px 10px",
-  fontSize: 13,
-  outline: "none",
-};
