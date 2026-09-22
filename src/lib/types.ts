@@ -1,15 +1,56 @@
 export type ReminderPriority = "low" | "medium" | "high";
+export type ReminderSource = "asuka" | "manual";
+/** Where reminders live: Brandon's Google Tasks list, or the JSON vault when Google isn't configured. */
+export type RemindersBackend = "google" | "vault";
 
 export interface Reminder {
   id: string;
   title: string;
   notes: string;
+  /** Local "YYYY-MM-DD", or "" for an undated task. */
   dueAt: string;
   time?: string;
   priority: ReminderPriority;
   done: boolean;
   createdAt: string;
-  source: "asuka" | "manual";
+  source: ReminderSource;
+}
+
+/**
+ * Dashboard-side fields Google Tasks has no column for, keyed by Google task id.
+ * Server-owned: never sent to, or accepted from, the browser.
+ */
+export interface ReminderMeta {
+  priority: ReminderPriority;
+  time?: string;
+  source: ReminderSource;
+  /** The id the reminder was first known by (Asuka's "r6", a manual uid) so re-syncs find the same task. */
+  externalId?: string;
+  createdAt: string;
+}
+
+export const REMINDER_PRIORITIES: ReminderPriority[] = ["low", "medium", "high"];
+
+export function isReminderPriority(v: unknown): v is ReminderPriority {
+  return v === "low" || v === "medium" || v === "high";
+}
+
+/** Coerce an incoming reminder (Asuka sync, browser) into the current shape. */
+export function normalizeReminder(raw: Partial<Reminder> & { id: string; title: string }): Reminder {
+  const now = new Date().toISOString();
+  const dueAt = typeof raw.dueAt === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw.dueAt) ? raw.dueAt : "";
+  const time = typeof raw.time === "string" && /^\d{2}:\d{2}$/.test(raw.time) ? raw.time : undefined;
+  return {
+    id: raw.id,
+    title: raw.title,
+    notes: typeof raw.notes === "string" ? raw.notes : "",
+    dueAt,
+    ...(time ? { time } : {}),
+    priority: isReminderPriority(raw.priority) ? raw.priority : "medium",
+    done: raw.done === true,
+    createdAt: raw.createdAt || now,
+    source: raw.source === "asuka" ? "asuka" : "manual",
+  };
 }
 
 export interface Note {
@@ -100,6 +141,8 @@ export interface AppState {
   attachments: Attachment[];
   leads: Lead[];
   customers: Customer[];
+  /** Only present in the server vault while reminders are backed by Google Tasks. */
+  reminderMeta?: Record<string, ReminderMeta>;
 }
 
 export const CRM_STAGES: { id: CrmStage; label: string; hint: string }[] = [

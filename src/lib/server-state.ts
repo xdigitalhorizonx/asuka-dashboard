@@ -1,7 +1,8 @@
 import { put, list } from "@vercel/blob";
 import { promises as fs } from "fs";
 import path from "path";
-import { normalizeCustomers, normalizeLeads, type AppState, type Reminder } from "./types";
+import { googleTasksEnabled } from "./google-tasks";
+import { normalizeCustomers, normalizeLeads, type AppState, type Reminder, type ReminderMeta } from "./types";
 
 export const BLOB_PATHNAME = "asuka-command-center/state.json";
 
@@ -90,19 +91,31 @@ export function emptyState(): AppState {
   };
 }
 
+/** First-boot seed. With Google Tasks as the reminders backend there is nothing to seed — the list is Brandon's. */
 export function seededState(): AppState {
   const base = emptyState();
-  return { ...base, reminders: SEED_REMINDERS };
+  return googleTasksEnabled() ? base : { ...base, reminders: SEED_REMINDERS };
+}
+
+function isReminderMeta(v: unknown): v is ReminderMeta {
+  if (!v || typeof v !== "object") return false;
+  const m = v as Partial<ReminderMeta>;
+  return typeof m.priority === "string" && typeof m.source === "string" && typeof m.createdAt === "string";
 }
 
 function normalize(raw: unknown): AppState {
   const parsed = (raw ?? {}) as Partial<AppState>;
+  const meta =
+    parsed.reminderMeta && typeof parsed.reminderMeta === "object"
+      ? Object.fromEntries(Object.entries(parsed.reminderMeta).filter(([, m]) => isReminderMeta(m)))
+      : undefined;
   return {
     reminders: parsed.reminders ?? [],
     notes: parsed.notes ?? [],
     attachments: parsed.attachments ?? [],
     leads: normalizeLeads(parsed.leads),
     customers: normalizeCustomers(parsed.customers),
+    ...(meta && Object.keys(meta).length ? { reminderMeta: meta } : {}),
   };
 }
 
@@ -143,6 +156,7 @@ export async function readState(): Promise<AppState> {
     }
     const data = normalize(await res.json());
     if (
+      !googleTasksEnabled() &&
       data.reminders.length === 0 &&
       data.leads.length === 0 &&
       data.notes.length <= 1

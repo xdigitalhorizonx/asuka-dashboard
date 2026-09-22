@@ -162,7 +162,7 @@ export default function Dashboard({ lockable = false }: { lockable?: boolean }) 
               leads={store.leads}
               monthOffset={monthOffset}
               setMonthOffset={setMonthOffset}
-              onToggle={(id) => store.setReminders((rs) => rs.map((r) => (r.id === id ? { ...r, done: !r.done } : r)))}
+              onToggle={(id) => store.toggleReminder(id)}
             />
           ) : tab === "notes" ? (
             <Notes store={store} />
@@ -220,7 +220,7 @@ function Overview({ store, dueToday, openReminders, pipeline, setTab }: { store:
   }, [store.reminders, store.leads, store.customers]);
 
   const tiles = [
-    { l: "DUE TODAY", v: dueToday.length, d: "SMS + board", t: "reminders" as Tab, hue: "var(--color-primary)" },
+    { l: "DUE TODAY", v: dueToday.length, d: store.remindersSource === "google" ? "Google Tasks" : "SMS + board", t: "reminders" as Tab, hue: "var(--color-primary)" },
     { l: "OPEN TASKS", v: openReminders.length, d: "until resolved", t: "reminders" as Tab, hue: "var(--color-amber)" },
     { l: "PIPELINE", v: pipeline.length, d: "active leads", t: "crm" as Tab, hue: "var(--color-accent)" },
     { l: "APPTS SET", v: apptsSet, d: apptsToday.length ? `${apptsToday.length} today` : "on the calendar", t: "crm" as Tab, hue: "var(--color-violet)" },
@@ -301,8 +301,15 @@ function Reminders({ store }: { store: Store }) {
   const [time, setTime] = useState("");
   const [priority, setPriority] = useState<ReminderPriority>("medium");
   const [notes, setNotes] = useState("");
-  const [source, setSource] = useState<"asuka" | "manual">("asuka");
+  const [source, setSource] = useState<"asuka" | "manual">("manual");
   const list = store.reminders.filter((r) => (filter === "all" ? true : filter === "done" ? r.done : !r.done));
+  const google = store.remindersSource === "google";
+  const badgeColor = store.remindersError ? "var(--color-primary)" : google ? "var(--color-green)" : "var(--color-muted)";
+  const badge = store.remindersError
+    ? "GOOGLE TASKS · ERROR"
+    : google
+      ? `GOOGLE TASKS · ${(store.remindersList || "").toUpperCase()}`
+      : "LOCAL VAULT · GOOGLE TASKS NOT CONNECTED";
 
   return (
     <div style={{ display: "grid", gap: 16, gridTemplateColumns: "320px 1fr" }}>
@@ -312,7 +319,7 @@ function Reminders({ store }: { store: Store }) {
         onSubmit={(e) => {
           e.preventDefault();
           if (!title.trim()) return;
-          store.setReminders((rs) => [{ id: uid("r"), title: title.trim(), notes, dueAt, time: time || undefined, priority, done: false, createdAt: new Date().toISOString(), source }, ...rs]);
+          store.addReminder({ id: uid("r"), title: title.trim(), notes, dueAt, time: time || undefined, priority, done: false, createdAt: new Date().toISOString(), source });
           setTitle("");
           setNotes("");
         }}
@@ -336,16 +343,39 @@ function Reminders({ store }: { store: Store }) {
         <button className="btn btn-primary" style={{ padding: 10 }}>ADD</button>
       </form>
       <div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
           {(["all", "active", "done"] as const).map((f) => (
             <button key={f} onClick={() => setFilter(f)} className="btn" style={{ padding: "6px 12px", color: filter === f ? "var(--color-ink)" : "var(--color-muted)", background: filter === f ? "var(--color-amber)" : "transparent", borderColor: filter === f ? "var(--color-amber)" : "var(--color-border)" }}>{f.toUpperCase()}</button>
           ))}
+          <span title={store.remindersError || (google ? "Reminders are read from and written to this Google Tasks list" : "Set the GOOGLE_* env vars to back reminders with Google Tasks")} style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 10, letterSpacing: "0.12em", color: badgeColor }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: badgeColor, boxShadow: `0 0 6px ${badgeColor}` }} />
+            {badge}
+          </span>
         </div>
+        {store.remindersError && (
+          <p style={{ margin: "0 0 12px", fontSize: 11, fontFamily: "var(--font-geist-mono), var(--font-mono)", color: "var(--color-primary)" }}>{store.remindersError}</p>
+        )}
+        {google && store.remindersPending > 0 && (
+          <div className="card" style={{ padding: "12px 14px", marginBottom: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", borderColor: tint("var(--color-amber)", 45), background: tint("var(--color-amber)", 6) }}>
+            <span style={{ fontSize: 13 }}>
+              <span style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", color: "var(--color-amber)" }}>{store.remindersPending}</span>
+              {store.remindersPending === 1 ? " reminder" : " reminders"} from before Google Tasks was connected {store.remindersPending === 1 ? "isn't" : "aren't"} in the list yet.
+            </span>
+            <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+              <button type="button" className="btn" disabled={store.remindersBusy} onClick={store.migrateVaultReminders} style={{ padding: "6px 10px", background: "var(--color-amber)", borderColor: "var(--color-amber)", color: "var(--color-ink)", fontWeight: 500, opacity: store.remindersBusy ? 0.6 : 1 }}>
+                {store.remindersBusy ? "MOVING…" : "MOVE TO GOOGLE TASKS"}
+              </button>
+              <button type="button" className="btn" disabled={store.remindersBusy} onClick={() => { if (window.confirm(`Discard ${store.remindersPending} old vault reminder${store.remindersPending === 1 ? "" : "s"}? They will not be moved to Google Tasks.`)) store.discardVaultReminders(); }} style={{ padding: "6px 10px", color: "var(--color-muted)" }}>
+                DISCARD
+              </button>
+            </span>
+          </div>
+        )}
         {list.length === 0 && <p style={{ color: "var(--color-muted)" }}>No reminders in this filter.</p>}
         {list.map((r) => (
           <div key={r.id} className="card" style={{ padding: 14, marginBottom: 8, display: "flex", gap: 12, alignItems: "flex-start", opacity: r.done ? 0.5 : 1 }}>
             <button
-              onClick={() => store.setReminders((rs) => rs.map((x) => (x.id === r.id ? { ...x, done: !x.done } : x)))}
+              onClick={() => store.toggleReminder(r.id)}
               style={{ width: 18, height: 18, marginTop: 2, borderRadius: 4, border: `1.5px solid ${priColor(r.priority)}`, background: r.done ? priColor(r.priority) : "transparent", cursor: "pointer", flexShrink: 0 }}
               aria-label={r.done ? "Undo" : "Done"}
             />
@@ -356,9 +386,9 @@ function Reminders({ store }: { store: Store }) {
                 <span style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 10, color: "var(--color-muted)" }}>{r.source.toUpperCase()}</span>
               </div>
               {r.notes && <p style={{ marginTop: 4, fontSize: 13, color: "var(--color-muted)" }}>{r.notes}</p>}
-              <p style={{ marginTop: 6, fontSize: 11, fontFamily: "var(--font-geist-mono), var(--font-mono)", color: "var(--color-accent)" }}>{r.dueAt}{r.time ? ` · ${r.time}` : ""}</p>
+              <p style={{ marginTop: 6, fontSize: 11, fontFamily: "var(--font-geist-mono), var(--font-mono)", color: r.dueAt ? "var(--color-accent)" : "var(--color-muted)" }}>{r.dueAt || "no date"}{r.time ? ` · ${r.time}` : ""}</p>
             </div>
-            <button onClick={() => store.setReminders((rs) => rs.filter((x) => x.id !== r.id))} className="btn" style={{ padding: "5px 8px", color: "var(--color-primary)" }}>REMOVE</button>
+            <button onClick={() => store.removeReminder(r.id)} className="btn" style={{ padding: "5px 8px", color: "var(--color-primary)" }}>REMOVE</button>
           </div>
         ))}
       </div>
