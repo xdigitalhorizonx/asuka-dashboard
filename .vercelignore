@@ -1,0 +1,7 @@
+# Vercel CLI does not reliably honour .gitignore for uploads, and this project is
+# deployed from the working tree. Keep local-only artifacts out of the deployment.
+.asuka-local-state.json
+.env*
+.git
+node_modules
+tsconfig.tsbuildinfo

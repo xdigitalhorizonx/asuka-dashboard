@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { SESSION_COOKIE, bearerMatchesSync, gateEnabled, verifySession } from "@/lib/auth";
+import { SESSION_COOKIE, bearerMatchesCron, bearerMatchesSync, gateEnabled, verifySession } from "@/lib/auth";
 
-/** Paths that stay reachable without a session: the login flow and the Asuka bot's bearer-protected sync API. */
-const OPEN = ["/login", "/api/login", "/api/logout", "/api/sync"];
+/** Paths that stay reachable without a session: the login flow, the Asuka bot's
+ *  bearer-protected sync API, and the Stripe webhook (authenticated by its signature). */
+const OPEN = ["/login", "/api/login", "/api/logout", "/api/sync", "/api/stripe/webhook"];
 
 export async function proxy(req: NextRequest) {
   if (!gateEnabled()) return NextResponse.next();
@@ -13,6 +14,7 @@ export async function proxy(req: NextRequest) {
 
   if (pathname.startsWith("/api/")) {
     if (bearerMatchesSync(req)) return NextResponse.next();
+    if (pathname === "/api/stripe/sync" && bearerMatchesCron(req)) return NextResponse.next();
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 

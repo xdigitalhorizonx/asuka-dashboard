@@ -3,30 +3,17 @@
 import { useState, type CSSProperties } from "react";
 import { PAYMENT_METHODS, customerTotal, type Customer, type PaymentMethod, type Transaction } from "@/lib/types";
 import { uid, useAsukaStore } from "@/lib/store";
-import { MONO, ago, localToday } from "@/lib/crm";
+import { ago, localToday } from "@/lib/crm";
+import { haptic } from "@/lib/haptics";
 
 type Store = ReturnType<typeof useAsukaStore>;
 
-const inp: CSSProperties = {
-  width: "100%",
-  borderRadius: 7,
-  border: "1px solid var(--color-border)",
-  background: "var(--color-bg)",
-  padding: "8px 10px",
-  fontSize: 13,
-  outline: "none",
-};
-
-const label: CSSProperties = {
-  fontSize: 10,
-  letterSpacing: "0.12em",
-  color: "var(--color-muted)",
-  fontFamily: MONO,
-};
-
 const ellipsis: CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 
-const COLS = "1.3fr 1fr 110px 110px";
+/** Customer list columns: wide screens vs phones (contact + last-paid hidden below 640px). */
+const LIST_COLS: CSSProperties = { ["--cols" as string]: "1.3fr 1fr 120px 110px", ["--cols-sm" as string]: "minmax(0, 1fr) 104px" };
+/** Transaction rows: date · method · memo · amount · delete (method hidden on phones). */
+const TX_COLS: CSSProperties = { ["--cols" as string]: "84px 52px minmax(0, 1fr) auto 24px", ["--cols-sm" as string]: "86px minmax(0, 1fr) auto 24px" };
 
 export function money(n: number): string {
   return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -79,6 +66,11 @@ export function Customers({ store }: { store: Store }) {
     0
   );
 
+  function select(id: string) {
+    if (id === sel) return;
+    setSel(id);
+    haptic("tap");
+  }
   function patch(id: string, fn: (c: Customer) => Partial<Customer>) {
     store.setCustomers((cs) => cs.map((c) => (c.id === id ? { ...c, ...fn(c), updatedAt: new Date().toISOString() } : c)));
   }
@@ -89,6 +81,7 @@ export function Customers({ store }: { store: Store }) {
     setSel(c.id);
     setQ("");
     setAdding(false);
+    haptic("save");
   }
   function remove(id: string) {
     store.setCustomers((cs) => cs.filter((c) => c.id !== id));
@@ -113,9 +106,10 @@ export function Customers({ store }: { store: Store }) {
       }
       store.adoptServerState(j.state);
       setSyncMsg({
-        text: `STRIPE SYNCED · ${j.customersAdded ?? 0} new customers · ${j.customersUpdated ?? 0} filled in · ${j.paymentsAdded ?? 0} payments added${j.skipped ? ` · ${j.skipped} skipped` : ""}`,
+        text: `Stripe synced · ${j.customersAdded ?? 0} new customers · ${j.customersUpdated ?? 0} filled in · ${j.paymentsAdded ?? 0} payments added${j.skipped ? ` · ${j.skipped} skipped` : ""}`,
         error: false,
       });
+      haptic("save");
     } catch {
       setSyncMsg({ text: "Stripe sync failed — are you offline?", error: true });
     } finally {
@@ -124,78 +118,95 @@ export function Customers({ store }: { store: Store }) {
   }
 
   const tiles = [
-    { l: "CUSTOMERS", v: String(store.customers.length), d: "on the books" },
-    { l: "COLLECTED · ALL TIME", v: money(allTime), d: `${store.customers.reduce((s, c) => s + c.transactions.length, 0)} transactions` },
-    { l: "COLLECTED · THIS MONTH", v: money(thisMonth), d: ym },
+    { l: "Customers", v: String(store.customers.length), d: "on the books" },
+    { l: "Collected · all time", v: money(allTime), d: `${store.customers.reduce((s, c) => s + c.transactions.length, 0)} transactions` },
+    { l: "Collected · this month", v: money(thisMonth), d: ym },
   ];
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr)) auto", gap: 12, alignItems: "stretch" }}>
-        {tiles.map((t) => (
-          <div key={t.l} className="card" style={{ padding: 16 }}>
-            <div style={{ fontFamily: MONO, fontSize: 24, fontWeight: 500, letterSpacing: "-0.03em", ...ellipsis }}>{t.v}</div>
-            <div style={{ marginTop: 6, ...label, letterSpacing: "0.14em" }}>{t.l}</div>
-            <div style={{ marginTop: 8, fontSize: 11, color: "var(--color-accent)", fontFamily: MONO }}>{t.d}</div>
-          </div>
-        ))}
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, justifyContent: "center" }}>
-          <button type="button" className="btn btn-primary" style={{ padding: "9px 14px" }} onClick={() => setAdding((v) => !v)}>
-            {adding ? "CLOSE" : "+ NEW CUSTOMER"}
+      <div className="page-head" style={{ marginBottom: 0 }}>
+        <h1 className="page-title">Customers</h1>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className="btn"
+            onClick={syncStripe}
+            disabled={syncing}
+            aria-busy={syncing}
+            title="Pull customers and card payments from Stripe (never overwrites your edits)"
+            style={{ color: "var(--color-accent)", borderColor: "rgba(113,218,202,0.45)" }}
+          >
+            {syncing ? "Syncing…" : "Sync Stripe"}
           </button>
-          <button type="button" className="btn" style={{ padding: "9px 14px", color: "var(--color-accent)", borderColor: "rgba(0,212,255,0.35)", opacity: syncing ? 0.6 : 1 }} onClick={syncStripe} disabled={syncing} title="Pull customers and card payments from Stripe (never overwrites your edits)">
-            {syncing ? "SYNCING…" : "⟳ SYNC STRIPE"}
+          <button type="button" className="btn btn-primary" onClick={() => setAdding((v) => !v)} aria-expanded={adding}>
+            {adding ? "Close" : "+ New customer"}
           </button>
         </div>
       </div>
 
+      {adding && <CustomerForm title="New customer" initial={EMPTY} onSave={addCustomer} onCancel={() => setAdding(false)} />}
+
       {syncMsg && (
-        <p style={{ margin: 0, fontSize: 11, letterSpacing: "0.06em", fontFamily: MONO, color: syncMsg.error ? "var(--color-primary)" : "var(--color-green)" }}>{syncMsg.text}</p>
+        <p role="status" style={{ margin: 0, fontSize: 13, fontWeight: 500, color: syncMsg.error ? "var(--color-danger)" : "var(--color-accent)" }}>{syncMsg.text}</p>
       )}
 
-      {adding && <CustomerForm title="NEW CUSTOMER" initial={EMPTY} onSave={addCustomer} onCancel={() => setAdding(false)} />}
-
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 420px", gap: 16, alignItems: "start" }}>
-        <div className="card" style={{ overflow: "hidden" }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "10px 14px", borderBottom: "1px solid var(--color-border)" }}>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search customers — company, contact, phone, email" aria-label="Search customers" style={{ ...inp, flex: 1 }} />
-            <span style={label}>{visible.length}/{store.customers.length}</span>
+      <div className="tiles-3">
+        {tiles.map((t) => (
+          <div key={t.l} className="card" style={{ padding: 18 }}>
+            <div className="total">{t.v}</div>
+            <div className="label" style={{ marginTop: 6 }}>{t.l}</div>
+            <div style={{ marginTop: 8, fontSize: 13, color: "var(--color-accent)" }}>{t.d}</div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "10px 14px", ...label, borderBottom: "1px solid var(--color-border)" }}>
-            <span>COMPANY</span>
-            <span>CONTACT</span>
-            <span>COLLECTED</span>
-            <span>LAST PAID</span>
+        ))}
+      </div>
+
+      <div className="split" style={{ ["--split-w" as string]: "420px" }}>
+        <div className="card" style={{ overflow: "hidden" }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "12px 14px", borderBottom: "1px solid var(--color-border)" }}>
+            <input className="input" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search customers — company, contact, phone, email" aria-label="Search customers" style={{ flex: 1, minWidth: 0 }} />
+            <span className="label" style={{ flexShrink: 0 }} aria-live="polite">{visible.length}/{store.customers.length}</span>
+          </div>
+          <div className="rows label" style={{ ...LIST_COLS, padding: "10px 14px", borderBottom: "1px solid var(--color-border)" }}>
+            <span>Company</span>
+            <span className="hide-sm">Contact</span>
+            <span className="money">Collected</span>
+            <span className="hide-sm money">Last paid</span>
           </div>
           {store.customers.length === 0 && (
-            <p style={{ padding: 16, color: "var(--color-muted)", fontSize: 13 }}>No customers yet. Add one with + NEW CUSTOMER, or pull them in with ⟳ SYNC STRIPE.</p>
+            <p style={{ padding: 16, margin: 0, color: "var(--color-muted)" }}>No customers yet. Add one with + New customer, or pull them in with Sync Stripe.</p>
           )}
-          {store.customers.length > 0 && visible.length === 0 && <p style={{ padding: 16, color: "var(--color-muted)" }}>No customers match “{q}”.</p>}
-          <div style={{ maxHeight: 620, overflowY: "auto" }}>
+          {store.customers.length > 0 && visible.length === 0 && <p style={{ padding: 16, margin: 0, color: "var(--color-muted)" }}>No customers match “{q}”.</p>}
+          <div role="listbox" aria-label="Customers" style={{ maxHeight: 620, overflowY: "auto" }}>
             {visible.map((c) => {
               const last = c.transactions[0];
+              const selected = c.id === sel;
               return (
                 <button
                   key={c.id}
-                  onClick={() => setSel(c.id)}
-                  style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, width: "100%", padding: "10px 14px", alignItems: "center", background: c.id === sel ? "rgba(0,212,255,0.06)" : "transparent", border: "none", borderTop: "1px solid var(--color-border)", color: "inherit", cursor: "pointer", textAlign: "left" }}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  onClick={() => select(c.id)}
+                  className="row-btn rows"
+                  style={LIST_COLS}
                 >
                   <span style={{ minWidth: 0 }}>
-                    <span style={{ display: "block", ...ellipsis }}>{displayName(c)}</span>
-                    {c.stripeCustomerId && <span style={{ ...label, fontSize: 9, color: "var(--color-accent)" }}>STRIPE</span>}
+                    <span style={{ display: "block", fontWeight: 500, ...ellipsis }}>{displayName(c)}</span>
+                    {c.stripeCustomerId && <span className="label" style={{ fontSize: 11, color: "var(--color-accent)" }}>Stripe</span>}
                   </span>
-                  <span style={{ ...ellipsis, color: "var(--color-muted)" }}>{c.company ? c.contact || "—" : c.email || "—"}</span>
-                  <span style={{ fontFamily: MONO, fontSize: 12, color: c.transactions.length ? "var(--color-amber)" : "var(--color-muted)" }}>{c.transactions.length ? money(customerTotal(c)) : "—"}</span>
-                  <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--color-muted)", ...ellipsis }}>{last ? fmtDate(last.date) : "—"}</span>
+                  <span className="hide-sm" style={{ ...ellipsis, color: "var(--color-muted)" }}>{c.company ? c.contact || "—" : c.email || "—"}</span>
+                  <span className="money" style={{ fontWeight: 500, color: c.transactions.length ? "var(--color-text)" : "var(--color-muted)" }}>{c.transactions.length ? money(customerTotal(c)) : "—"}</span>
+                  <span className="hide-sm money" style={{ fontSize: 13, color: "var(--color-muted)" }}>{last ? fmtDate(last.date) : "—"}</span>
                 </button>
               );
             })}
           </div>
         </div>
 
-        <aside className="card" style={{ padding: 18 }}>
+        <aside className="card" style={{ padding: 18 }} aria-label="Selected customer">
           {!active ? (
-            <p style={{ color: "var(--color-muted)" }}>Select a customer.</p>
+            <p style={{ color: "var(--color-muted)", margin: 0 }}>Select a customer.</p>
           ) : (
             <CustomerDetail key={active.id} customer={active} onPatch={(fn) => patch(active.id, fn)} onDelete={() => remove(active.id)} />
           )}
@@ -212,7 +223,7 @@ function CustomerForm({ title, initial, onSave, onCancel }: { title: string; ini
   return (
     <form
       className="card"
-      style={{ padding: 16, display: "grid", gap: 10 }}
+      style={{ padding: 18, display: "grid", gap: 10 }}
       onSubmit={(e) => {
         e.preventDefault();
         if (!valid) return;
@@ -220,22 +231,22 @@ function CustomerForm({ title, initial, onSave, onCancel }: { title: string; ini
         onSave(trimmed);
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <span style={label}>{title}</span>
-        <span style={{ ...label, letterSpacing: 0 }}>company or contact required</span>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <h2 className="card-title" style={{ margin: 0 }}>{title}</h2>
+        <span style={{ fontSize: 13, color: "var(--color-muted)" }}>Company or contact required</span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}>
-        <input style={inp} placeholder="Company name" value={f.company} onChange={set("company")} aria-label="Company name" />
-        <input style={inp} placeholder="Contact (person)" value={f.contact} onChange={set("contact")} aria-label="Contact" />
-        <input style={inp} placeholder="Contact phone" value={f.phone} onChange={set("phone")} aria-label="Contact phone" />
-        <input style={inp} placeholder="Contact email" type="email" value={f.email} onChange={set("email")} aria-label="Contact email" />
-        <input style={inp} placeholder="Website" value={f.website} onChange={set("website")} aria-label="Website" />
-        <input style={inp} placeholder="Address" value={f.address} onChange={set("address")} aria-label="Address" />
+      <div className="fields">
+        <input className="input" placeholder="Company name" value={f.company} onChange={set("company")} aria-label="Company name" autoFocus />
+        <input className="input" placeholder="Contact (person)" value={f.contact} onChange={set("contact")} aria-label="Contact" />
+        <input className="input" type="tel" inputMode="tel" autoComplete="tel" placeholder="Contact phone" value={f.phone} onChange={set("phone")} aria-label="Contact phone" />
+        <input className="input" type="email" inputMode="email" autoComplete="email" placeholder="Contact email" value={f.email} onChange={set("email")} aria-label="Contact email" />
+        <input className="input" inputMode="url" placeholder="Website" value={f.website} onChange={set("website")} aria-label="Website" />
+        <input className="input" placeholder="Address" value={f.address} onChange={set("address")} aria-label="Address" />
       </div>
-      <textarea style={{ ...inp, height: 64, resize: "vertical" }} placeholder="Notes" value={f.notes} onChange={set("notes")} aria-label="Notes" />
-      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-        <button type="button" className="btn" style={{ padding: "8px 12px", color: "var(--color-muted)" }} onClick={onCancel}>CANCEL</button>
-        <button className="btn btn-primary" style={{ padding: "8px 14px", opacity: valid ? 1 : 0.5 }} disabled={!valid}>SAVE CUSTOMER</button>
+      <textarea className="input" style={{ height: 72, resize: "vertical" }} placeholder="Notes" value={f.notes} onChange={set("notes")} aria-label="Notes" />
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+        <button type="button" className="btn btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn btn-primary" disabled={!valid}>Save customer</button>
       </div>
     </form>
   );
@@ -262,6 +273,7 @@ function CustomerDetail({ customer, onPatch, onDelete }: { customer: Customer; o
     onPatch((c) => ({ transactions: [t, ...c.transactions] }));
     setTx({ amount: "", method: tx.method, date: localToday(), memo: "" });
     setTxOpen(false);
+    haptic("save");
   }
   function removeTx(id: string) {
     onPatch((c) => ({ transactions: c.transactions.filter((t) => t.id !== id) }));
@@ -270,104 +282,114 @@ function CustomerDetail({ customer, onPatch, onDelete }: { customer: Customer; o
   if (editing) {
     return (
       <CustomerForm
-        title="EDIT CUSTOMER"
+        title="Edit customer"
         initial={fieldsOf(customer)}
         onSave={(f) => {
           onPatch(() => f);
           setEditing(false);
+          haptic("save");
         }}
         onCancel={() => setEditing(false)}
       />
     );
   }
 
+  const dash = <span style={{ color: "var(--color-muted)" }}>—</span>;
+  const link: CSSProperties = { color: "var(--color-accent)", textDecoration: "none" };
+
   return (
     <>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 15, ...ellipsis }}>{displayName(customer)}</div>
-          {customer.company && customer.contact && <div style={{ fontSize: 12, color: "var(--color-muted)", ...ellipsis }}>{customer.contact}</div>}
-          {customer.stripeCustomerId && <div style={{ ...label, fontSize: 9, color: "var(--color-accent)", marginTop: 2 }}>STRIPE · {customer.stripeCustomerId}</div>}
+          <h2 className="card-title" style={{ margin: 0, ...ellipsis }}>{displayName(customer)}</h2>
+          {customer.company && customer.contact && <div style={{ color: "var(--color-muted)", ...ellipsis }}>{customer.contact}</div>}
+          {customer.stripeCustomerId && <div className="label" style={{ fontSize: 11, color: "var(--color-accent)", marginTop: 4, ...ellipsis }}>Stripe · {customer.stripeCustomerId}</div>}
         </div>
-        <button type="button" className="btn" style={{ padding: "5px 10px", flexShrink: 0 }} onClick={() => setEditing(true)}>EDIT</button>
+        <button type="button" className="btn" style={{ flexShrink: 0 }} onClick={() => setEditing(true)}>Edit</button>
       </div>
 
-      <dl style={{ margin: "14px 0 0", display: "grid", gridTemplateColumns: "72px 1fr", rowGap: 6, columnGap: 10, fontSize: 12 }}>
-        <dt style={label}>PHONE</dt>
-        <dd style={{ margin: 0, fontFamily: MONO }}>{customer.phone ? <a href={`tel:${customer.phone.replace(/[^\d+]/g, "")}`} style={{ color: "var(--color-accent)", textDecoration: "none" }}>{customer.phone}</a> : <span style={{ color: "var(--color-muted)" }}>—</span>}</dd>
-        <dt style={label}>EMAIL</dt>
-        <dd style={{ margin: 0, fontFamily: MONO, ...ellipsis }}>{customer.email ? <a href={`mailto:${customer.email}`} style={{ color: "var(--color-accent)", textDecoration: "none" }}>{customer.email}</a> : <span style={{ color: "var(--color-muted)" }}>—</span>}</dd>
-        <dt style={label}>WEBSITE</dt>
-        <dd style={{ margin: 0, fontFamily: MONO, ...ellipsis }}>{customer.website ? <a href={websiteHref(customer.website)} target="_blank" rel="noreferrer" style={{ color: "var(--color-accent)", textDecoration: "none" }}>{customer.website}</a> : <span style={{ color: "var(--color-muted)" }}>—</span>}</dd>
-        <dt style={label}>ADDRESS</dt>
-        <dd style={{ margin: 0, whiteSpace: "pre-wrap" }}>{customer.address || <span style={{ color: "var(--color-muted)" }}>—</span>}</dd>
+      <dl style={{ margin: "16px 0 0", display: "grid", gridTemplateColumns: "76px minmax(0, 1fr)", rowGap: 8, columnGap: 10 }}>
+        <dt className="label" style={{ paddingTop: 2 }}>Phone</dt>
+        <dd style={{ margin: 0, fontSize: 16 }}>{customer.phone ? <a href={`tel:${customer.phone.replace(/[^\d+]/g, "")}`} style={link}>{customer.phone}</a> : dash}</dd>
+        <dt className="label" style={{ paddingTop: 2 }}>Email</dt>
+        <dd style={{ margin: 0, ...ellipsis }}>{customer.email ? <a href={`mailto:${customer.email}`} style={link}>{customer.email}</a> : dash}</dd>
+        <dt className="label" style={{ paddingTop: 2 }}>Website</dt>
+        <dd style={{ margin: 0, ...ellipsis }}>{customer.website ? <a href={websiteHref(customer.website)} target="_blank" rel="noreferrer" style={link}>{customer.website}</a> : dash}</dd>
+        <dt className="label" style={{ paddingTop: 2 }}>Address</dt>
+        <dd style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{customer.address || dash}</dd>
       </dl>
 
-      <div style={{ marginTop: 14, borderTop: "1px solid var(--color-border)", paddingTop: 12 }}>
-        <div style={{ ...label, marginBottom: 6 }}>NOTES</div>
+      <div style={{ marginTop: 16, borderTop: "1px solid var(--color-border)", paddingTop: 14 }}>
+        <div className="label" style={{ marginBottom: 6 }}>Notes</div>
         {customer.notes ? (
-          <p style={{ margin: 0, fontSize: 12, whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{customer.notes}</p>
+          <p style={{ margin: 0, whiteSpace: "pre-wrap", lineHeight: 1.5, overflowWrap: "anywhere" }}>{customer.notes}</p>
         ) : (
-          <p style={{ margin: 0, fontSize: 12, color: "var(--color-muted)" }}>No notes — use EDIT to add some.</p>
+          <p style={{ margin: 0, color: "var(--color-muted)" }}>No notes — use Edit to add some.</p>
         )}
       </div>
 
       <div style={{ marginTop: 18, borderTop: "1px solid var(--color-border)", paddingTop: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div>
-            <span style={label}>TRANSACTIONS</span>
-            <span style={{ marginLeft: 10, fontFamily: MONO, fontSize: 12, color: "var(--color-amber)" }}>{money(total)}</span>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
+            <span className="label">Transactions</span>
+            <span className="money" style={{ fontWeight: 600 }}>{money(total)}</span>
           </div>
           <button
             type="button"
             className="btn btn-primary"
             onClick={() => setTxOpen((v) => !v)}
+            aria-expanded={txOpen}
             aria-label={txOpen ? "Close transaction form" : "Add transaction"}
             title={txOpen ? "Close" : "Add a transaction"}
-            style={{ width: 30, height: 30, padding: 0, fontSize: 18, lineHeight: 1, borderRadius: 999 }}
+            style={{ width: 36, height: 36, minHeight: 36, padding: 0, fontSize: 20, borderRadius: 999 }}
           >
             {txOpen ? "×" : "+"}
           </button>
         </div>
 
         {txOpen && (
-          <div style={{ padding: 12, borderRadius: 8, border: "1px solid rgba(255,45,85,0.35)", background: "rgba(255,45,85,0.05)", display: "grid", gap: 8, marginBottom: 12 }}>
-            <div style={{ display: "flex", gap: 6 }}>
-              {PAYMENT_METHODS.map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  className="btn"
-                  onClick={() => setTx({ ...tx, method: m.id })}
-                  style={{ flex: 1, padding: "7px 0", color: tx.method === m.id ? "#fff" : methodColor(m.id), background: tx.method === m.id ? methodColor(m.id) : "transparent", borderColor: methodColor(m.id) }}
-                >
-                  {m.label.toUpperCase()}
-                </button>
-              ))}
+          <div style={{ padding: 12, borderRadius: 14, border: "1px solid rgba(181,154,255,0.4)", background: "rgba(181,154,255,0.07)", display: "grid", gap: 8, marginBottom: 12 }}>
+            <div style={{ display: "flex", gap: 6 }} role="radiogroup" aria-label="Payment method">
+              {PAYMENT_METHODS.map((m) => {
+                const on = tx.method === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    className="btn"
+                    onClick={() => setTx({ ...tx, method: m.id })}
+                    style={{ flex: 1, color: on ? "var(--color-on-primary)" : methodColor(m.id), background: on ? methodColor(m.id) : undefined, borderColor: methodColor(m.id) }}
+                  >
+                    {m.label}
+                  </button>
+                );
+              })}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              <input style={inp} type="number" min="0.01" step="0.01" inputMode="decimal" placeholder="Amount $" value={tx.amount} onChange={(e) => setTx({ ...tx, amount: e.target.value })} aria-label="Amount" autoFocus onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTx(); } }} />
-              <input style={{ ...inp, colorScheme: "dark" }} type="date" value={tx.date} onChange={(e) => setTx({ ...tx, date: e.target.value })} aria-label="Date" />
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
+              <input className="input" type="number" min="0.01" step="0.01" inputMode="decimal" placeholder="Amount $" value={tx.amount} onChange={(e) => setTx({ ...tx, amount: e.target.value })} aria-label="Amount" autoFocus onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTx(); } }} />
+              <input className="input" type="date" value={tx.date} onChange={(e) => setTx({ ...tx, date: e.target.value })} aria-label="Date" />
             </div>
-            <input style={inp} placeholder="Memo — invoice #, what it was for" value={tx.memo} onChange={(e) => setTx({ ...tx, memo: e.target.value })} aria-label="Memo" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTx(); } }} />
-            <button type="button" className="btn btn-primary" style={{ padding: "8px 10px", opacity: txValid ? 1 : 0.5 }} disabled={!txValid} onClick={addTx}>
-              RECORD {tx.method.toUpperCase()} PAYMENT{txValid ? ` · ${money(amountNum)}` : ""}
+            <input className="input" placeholder="Memo — invoice #, what it was for" value={tx.memo} onChange={(e) => setTx({ ...tx, memo: e.target.value })} aria-label="Memo" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTx(); } }} />
+            <button type="button" className="btn btn-primary" disabled={!txValid} onClick={addTx}>
+              Record {tx.method} payment{txValid ? ` · ${money(amountNum)}` : ""}
             </button>
           </div>
         )}
 
         <div style={{ display: "grid", gap: 6, maxHeight: 360, overflowY: "auto" }}>
-          {customer.transactions.length === 0 && <p style={{ margin: 0, fontSize: 12, color: "var(--color-muted)" }}>No transactions yet — tap + to record one.</p>}
+          {customer.transactions.length === 0 && <p style={{ margin: 0, color: "var(--color-muted)" }}>No transactions yet — tap + to record one.</p>}
           {customer.transactions.map((t) => (
-            <div key={t.id} style={{ display: "grid", gridTemplateColumns: "84px 52px 1fr auto 18px", gap: 8, alignItems: "center", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--color-border)", background: "var(--color-bg)", fontSize: 12 }}>
-              <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--color-muted)" }} title={ago(t.createdAt)}>{fmtDate(t.date)}</span>
-              <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.08em", color: methodColor(t.method) }}>{t.method.toUpperCase()}</span>
+            <div key={t.id} className="rows" style={{ ...TX_COLS, padding: "8px 10px", borderRadius: 12, border: "1px solid var(--color-border)", background: "var(--color-surface)", fontSize: 14 }}>
+              <span style={{ fontSize: 13, color: "var(--color-muted)", ...ellipsis }} title={ago(t.createdAt)}>{fmtDate(t.date)}</span>
+              <span className="hide-sm label" style={{ fontSize: 11, color: methodColor(t.method) }}>{t.method}</span>
               <span style={{ ...ellipsis, color: t.memo ? "var(--color-text)" : "var(--color-muted)" }} title={t.memo}>
                 {t.memo || "—"}
-                {t.stripeId && <span style={{ marginLeft: 6, fontFamily: MONO, fontSize: 9, letterSpacing: "0.08em", color: "var(--color-accent)" }}>STRIPE</span>}
+                {t.stripeId && <span className="label" style={{ marginLeft: 6, fontSize: 10, color: "var(--color-accent)" }}>Stripe</span>}
               </span>
-              <span style={{ fontFamily: MONO, fontSize: 12, color: "var(--color-amber)" }}>{money(t.amount)}</span>
-              <button type="button" onClick={() => { if (!t.stripeId || window.confirm("This payment came from Stripe and will come back on the next sync. Remove it anyway?")) removeTx(t.id); }} aria-label="Delete transaction" title="Delete" style={{ background: "transparent", border: "none", color: "var(--color-muted)", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
+              <span className="money" style={{ fontWeight: 500 }}>{money(t.amount)}</span>
+              <button type="button" onClick={() => { if (!t.stripeId || window.confirm("This payment came from Stripe and will come back on the next sync. Remove it anyway?")) removeTx(t.id); }} aria-label="Delete transaction" title="Delete" style={{ background: "transparent", border: "none", color: "var(--color-muted)", cursor: "pointer", fontSize: 18, lineHeight: 1, padding: 0, width: 24, height: 24, borderRadius: 8 }}>×</button>
             </div>
           ))}
         </div>
@@ -375,14 +397,14 @@ function CustomerDetail({ customer, onPatch, onDelete }: { customer: Customer; o
 
       <button
         type="button"
-        className="btn"
-        style={{ marginTop: 18, padding: "6px 10px", color: "var(--color-primary)" }}
+        className="btn btn-danger"
+        style={{ marginTop: 18 }}
         onClick={() => {
           const n = customer.transactions.length;
           if (window.confirm(`Delete ${displayName(customer)}? This removes the customer and ${n} transaction${n === 1 ? "" : "s"}.`)) onDelete();
         }}
       >
-        DELETE CUSTOMER
+        Delete customer
       </button>
     </>
   );

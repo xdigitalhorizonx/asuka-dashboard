@@ -64,6 +64,15 @@ export function bearerMatchesSync(req: Request): boolean {
   return t.length > 0 && timingSafeEqual(t, expected);
 }
 
+/** Vercel Cron sends `Authorization: Bearer $CRON_SECRET` — lets the scheduled Stripe reconcile through the gate. */
+export function bearerMatchesCron(req: Request): boolean {
+  const expected = process.env.CRON_SECRET;
+  if (!expected) return false;
+  const h = req.headers.get("authorization") || "";
+  const t = h.toLowerCase().startsWith("bearer ") ? h.slice(7).trim() : "";
+  return t.length > 0 && timingSafeEqual(t, expected);
+}
+
 /** Only allow same-origin relative redirects after login. */
 export function safeNext(raw: string | null | undefined): string {
   const n = String(raw ?? "/");
