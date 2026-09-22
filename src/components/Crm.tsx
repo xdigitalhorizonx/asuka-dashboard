@@ -3,7 +3,7 @@
 import { useState, type CSSProperties, type KeyboardEvent } from "react";
 import { CRM_STAGES, type CrmStage, type Lead, type LeadNote } from "@/lib/types";
 import { uid, useAsukaStore } from "@/lib/store";
-import { MONO, ago, fmtAppt, fmtStamp, stageColor, stageLabel } from "@/lib/crm";
+import { MONO, ago, fmtAppt, fmtStamp, stageColor, stageLabel, tint } from "@/lib/crm";
 
 type Store = ReturnType<typeof useAsukaStore>;
 
@@ -131,9 +131,9 @@ export function Crm({ store }: { store: Store }) {
               <button
                 key={l.id}
                 onClick={() => setSel(l.id)}
-                style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, width: "100%", padding: "10px 14px", alignItems: "center", background: l.id === sel ? "rgba(0,212,255,0.06)" : "transparent", border: "none", borderTop: "1px solid var(--color-border)", color: "inherit", cursor: "pointer", textAlign: "left" }}
+                style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, width: "100%", padding: "10px 14px", alignItems: "center", background: l.id === sel ? tint(stageColor(l.stage), 9) : "transparent", border: "none", borderTop: "1px solid var(--color-border)", color: "inherit", cursor: "pointer", textAlign: "left" }}
               >
-                <span style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,45,85,0.15)", color: "var(--color-primary)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontFamily: MONO }}>{initials(l.name)}</span>
+                <span style={{ width: 28, height: 28, borderRadius: "50%", background: tint(stageColor(l.stage), 18), color: stageColor(l.stage), display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontFamily: MONO }}>{initials(l.name)}</span>
                 <span style={ellipsis}>{l.name}</span>
                 <span style={{ ...ellipsis, color: "var(--color-muted)" }}>{l.company || "—"}</span>
                 <span style={{ ...ellipsis, fontFamily: MONO, fontSize: 10, color: stageColor(l.stage) }}>{stageLabel(l.stage).toUpperCase()}</span>
@@ -172,7 +172,7 @@ export function Crm({ store }: { store: Store }) {
                   setSel(id);
                 }
               }}
-              style={{ minHeight: 180, padding: 12, display: "flex", flexDirection: "column" }}
+              style={{ minHeight: 180, padding: 12, display: "flex", flexDirection: "column", boxShadow: `inset 0 2px 0 0 ${tint(stageColor(col.id), 70)}` }}
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
                 <span style={{ fontSize: 11, letterSpacing: "0.1em", fontFamily: MONO, color: stageColor(col.id) }} title={col.hint}>{col.label.toUpperCase()}</span>
@@ -187,7 +187,7 @@ export function Crm({ store }: { store: Store }) {
                       draggable
                       onDragStart={(e) => e.dataTransfer.setData("text/lead-id", l.id)}
                       onClick={() => setSel(l.id)}
-                      style={{ padding: 10, marginBottom: 6, borderRadius: 8, border: `1px solid ${l.id === sel ? "rgba(255,45,85,0.45)" : "var(--color-border)"}`, cursor: "grab", background: "var(--color-surface)" }}
+                      style={{ padding: 10, marginBottom: 6, borderRadius: 8, border: `1px solid ${l.id === sel ? tint(stageColor(col.id), 60) : "var(--color-border)"}`, cursor: "grab", background: l.id === sel ? tint(stageColor(col.id), 7) : "var(--color-surface)" }}
                     >
                       <div style={{ fontSize: 13, ...ellipsis }}>{l.name}</div>
                       <div style={{ fontSize: 11, color: "var(--color-muted)", ...ellipsis }}>{l.company || "—"}</div>
@@ -254,7 +254,7 @@ function LeadDetail({
   return (
     <>
       <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10 }}>
-        <span style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(255,45,85,0.15)", color: "var(--color-primary)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: MONO, flexShrink: 0 }}>{initials(lead.name)}</span>
+        <span style={{ width: 40, height: 40, borderRadius: "50%", background: tint(stageColor(lead.stage), 18), color: stageColor(lead.stage), display: "flex", alignItems: "center", justifyContent: "center", fontFamily: MONO, flexShrink: 0 }}>{initials(lead.name)}</span>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 600, ...ellipsis }}>{lead.name}</div>
           <div style={{ fontSize: 12, color: "var(--color-muted)", ...ellipsis }}>{lead.company || "Independent"}</div>
@@ -278,7 +278,7 @@ function LeadDetail({
             onClick={() => onPatch(() => ({ stage: s.id }))}
             className="btn"
             title={s.hint}
-            style={{ padding: "6px 8px", color: lead.stage === s.id ? "#fff" : "var(--color-muted)", background: lead.stage === s.id ? stageColor(s.id) : "transparent", borderColor: lead.stage === s.id ? stageColor(s.id) : "var(--color-border)" }}
+            style={{ padding: "6px 8px", color: lead.stage === s.id ? "var(--color-ink)" : "var(--color-muted)", background: lead.stage === s.id ? stageColor(s.id) : "transparent", borderColor: lead.stage === s.id ? stageColor(s.id) : "var(--color-border)" }}
           >
             {s.label.toUpperCase()}
           </button>
@@ -286,7 +286,7 @@ function LeadDetail({
       </div>
 
       {lead.stage === "appointment_set" && (
-        <div style={{ marginTop: 14, padding: 12, borderRadius: 8, border: "1px solid rgba(167,139,250,0.35)", background: "rgba(167,139,250,0.06)" }}>
+        <div style={{ marginTop: 14, padding: 12, borderRadius: 8, border: `1px solid ${tint("var(--color-violet)", 40)}`, background: tint("var(--color-violet)", 7) }}>
           <div style={{ ...label, color: "var(--color-violet)", marginBottom: 6 }}>APPOINTMENT</div>
           <input
             type="datetime-local"

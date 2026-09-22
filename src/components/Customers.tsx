@@ -3,7 +3,7 @@
 import { useState, type CSSProperties } from "react";
 import { PAYMENT_METHODS, customerTotal, type Customer, type PaymentMethod, type Transaction } from "@/lib/types";
 import { uid, useAsukaStore } from "@/lib/store";
-import { MONO, ago, localToday } from "@/lib/crm";
+import { MONO, ago, localToday, tint } from "@/lib/crm";
 
 type Store = ReturnType<typeof useAsukaStore>;
 
@@ -124,26 +124,26 @@ export function Customers({ store }: { store: Store }) {
   }
 
   const tiles = [
-    { l: "CUSTOMERS", v: String(store.customers.length), d: "on the books" },
-    { l: "COLLECTED · ALL TIME", v: money(allTime), d: `${store.customers.reduce((s, c) => s + c.transactions.length, 0)} transactions` },
-    { l: "COLLECTED · THIS MONTH", v: money(thisMonth), d: ym },
+    { l: "CUSTOMERS", v: String(store.customers.length), d: "on the books", hue: "var(--color-green)" },
+    { l: "COLLECTED · ALL TIME", v: money(allTime), d: `${store.customers.reduce((s, c) => s + c.transactions.length, 0)} transactions`, hue: "var(--color-amber)" },
+    { l: "COLLECTED · THIS MONTH", v: money(thisMonth), d: ym, hue: "var(--color-lilac)" },
   ];
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr)) auto", gap: 12, alignItems: "stretch" }}>
         {tiles.map((t) => (
-          <div key={t.l} className="card" style={{ padding: 16 }}>
-            <div style={{ fontFamily: MONO, fontSize: 24, fontWeight: 500, letterSpacing: "-0.03em", ...ellipsis }}>{t.v}</div>
+          <div key={t.l} className="card" style={{ padding: 16, boxShadow: `inset 0 2px 0 0 ${tint(t.hue, 70)}` }}>
+            <div style={{ fontFamily: MONO, fontSize: 24, fontWeight: 500, letterSpacing: "-0.03em", color: t.hue, ...ellipsis }}>{t.v}</div>
             <div style={{ marginTop: 6, ...label, letterSpacing: "0.14em" }}>{t.l}</div>
-            <div style={{ marginTop: 8, fontSize: 11, color: "var(--color-accent)", fontFamily: MONO }}>{t.d}</div>
+            <div style={{ marginTop: 8, fontSize: 11, color: `color-mix(in srgb, ${t.hue} 80%, var(--color-muted))`, fontFamily: MONO }}>{t.d}</div>
           </div>
         ))}
         <div style={{ display: "flex", flexDirection: "column", gap: 8, justifyContent: "center" }}>
-          <button type="button" className="btn btn-primary" style={{ padding: "9px 14px" }} onClick={() => setAdding((v) => !v)}>
+          <button type="button" className="btn" style={{ padding: "9px 14px", background: "var(--color-green)", borderColor: "var(--color-green)", color: "var(--color-ink)", fontWeight: 500 }} onClick={() => setAdding((v) => !v)}>
             {adding ? "CLOSE" : "+ NEW CUSTOMER"}
           </button>
-          <button type="button" className="btn" style={{ padding: "9px 14px", color: "var(--color-accent)", borderColor: "rgba(0,212,255,0.35)", opacity: syncing ? 0.6 : 1 }} onClick={syncStripe} disabled={syncing} title="Pull customers and card payments from Stripe (never overwrites your edits)">
+          <button type="button" className="btn" style={{ padding: "9px 14px", color: "var(--color-accent)", borderColor: tint("var(--color-accent)", 45), background: tint("var(--color-accent)", 6), opacity: syncing ? 0.6 : 1 }} onClick={syncStripe} disabled={syncing} title="Pull customers and card payments from Stripe (never overwrites your edits)">
             {syncing ? "SYNCING…" : "⟳ SYNC STRIPE"}
           </button>
         </div>
@@ -178,7 +178,7 @@ export function Customers({ store }: { store: Store }) {
                 <button
                   key={c.id}
                   onClick={() => setSel(c.id)}
-                  style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, width: "100%", padding: "10px 14px", alignItems: "center", background: c.id === sel ? "rgba(0,212,255,0.06)" : "transparent", border: "none", borderTop: "1px solid var(--color-border)", color: "inherit", cursor: "pointer", textAlign: "left" }}
+                  style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, width: "100%", padding: "10px 14px", alignItems: "center", background: c.id === sel ? tint("var(--color-green)", 8) : "transparent", border: "none", borderTop: "1px solid var(--color-border)", color: "inherit", cursor: "pointer", textAlign: "left" }}
                 >
                   <span style={{ minWidth: 0 }}>
                     <span style={{ display: "block", ...ellipsis }}>{displayName(c)}</span>
@@ -324,14 +324,14 @@ function CustomerDetail({ customer, onPatch, onDelete }: { customer: Customer; o
             onClick={() => setTxOpen((v) => !v)}
             aria-label={txOpen ? "Close transaction form" : "Add transaction"}
             title={txOpen ? "Close" : "Add a transaction"}
-            style={{ width: 30, height: 30, padding: 0, fontSize: 18, lineHeight: 1, borderRadius: 999 }}
+            style={{ width: 30, height: 30, padding: 0, fontSize: 18, lineHeight: 1, borderRadius: 999, background: "var(--color-green)", borderColor: "var(--color-green)" }}
           >
             {txOpen ? "×" : "+"}
           </button>
         </div>
 
         {txOpen && (
-          <div style={{ padding: 12, borderRadius: 8, border: "1px solid rgba(255,45,85,0.35)", background: "rgba(255,45,85,0.05)", display: "grid", gap: 8, marginBottom: 12 }}>
+          <div style={{ padding: 12, borderRadius: 8, border: `1px solid ${tint("var(--color-green)", 40)}`, background: tint("var(--color-green)", 6), display: "grid", gap: 8, marginBottom: 12 }}>
             <div style={{ display: "flex", gap: 6 }}>
               {PAYMENT_METHODS.map((m) => (
                 <button
@@ -339,7 +339,7 @@ function CustomerDetail({ customer, onPatch, onDelete }: { customer: Customer; o
                   type="button"
                   className="btn"
                   onClick={() => setTx({ ...tx, method: m.id })}
-                  style={{ flex: 1, padding: "7px 0", color: tx.method === m.id ? "#fff" : methodColor(m.id), background: tx.method === m.id ? methodColor(m.id) : "transparent", borderColor: methodColor(m.id) }}
+                  style={{ flex: 1, padding: "7px 0", color: tx.method === m.id ? "var(--color-ink)" : methodColor(m.id), background: tx.method === m.id ? methodColor(m.id) : "transparent", borderColor: tx.method === m.id ? methodColor(m.id) : tint(methodColor(m.id), 45) }}
                 >
                   {m.label.toUpperCase()}
                 </button>

@@ -2,6 +2,12 @@ import { CRM_STAGES, type CrmStage, type Lead } from "./types";
 
 export const MONO = "var(--font-geist-mono), var(--font-mono)";
 
+/** `tint(hue, 12)` → the hue at 12% over transparent; used for selected rows, chips, glows. */
+export function tint(hue: string, pct: number): string {
+  return `color-mix(in srgb, ${hue} ${pct}%, transparent)`;
+}
+
+/** One pastel per pipeline stage — sky → lavender → apricot → mint, with "lost" a dusty rose-grey. */
 export function stageColor(s: CrmStage): string {
   switch (s) {
     case "new_lead":
@@ -13,7 +19,7 @@ export function stageColor(s: CrmStage): string {
     case "closed_won":
       return "var(--color-green)";
     default:
-      return "var(--color-muted)";
+      return "color-mix(in srgb, var(--color-primary) 35%, var(--color-muted))";
   }
 }
 

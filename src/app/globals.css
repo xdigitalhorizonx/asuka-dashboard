@@ -1,18 +1,32 @@
 @import url("https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 
+/*
+  Central Dogma — pastel-on-dark palette.
+  Base surfaces are deep plum; every accent is a soft pastel tint so the
+  board reads calm at night. Each section of the app owns a different hue
+  (see NAV_HUE in Dashboard.tsx) so the colour actually varies across the UI.
+*/
 :root {
-  --color-bg: #06090f;
-  --color-surface: #0a0f1a;
-  --color-card: #0d1117;
-  --color-primary: #ff2d55;
-  --color-accent: #00d4ff;
-  --color-green: #10b981;
-  --color-amber: #f59e0b;
-  --color-violet: #a78bfa;
-  --color-muted: #64748b;
-  --color-text: #e2e8f0;
-  --color-border: rgba(255, 255, 255, 0.06);
+  --color-bg: #100e17;
+  --color-surface: #16131f;
+  --color-card: #1b1826;
+  --color-ink: #1a1424; /* text on top of a pastel fill */
+  --color-text: #ece8f5;
+  --color-muted: #948da9;
+  --color-border: rgba(255, 255, 255, 0.07);
+
+  /* pastels */
+  --color-primary: #ffa3b5; /* rose — the Asuka red, softened */
+  --color-accent: #9bd8ff; /* sky */
+  --color-green: #a8ecc4; /* mint */
+  --color-amber: #ffd39a; /* apricot */
+  --color-violet: #cdb8ff; /* lavender */
+  --color-peach: #ffbfa3;
+  --color-lemon: #f5eaa3;
+  --color-lilac: #e5b8f4;
+  --color-teal: #a3ece6;
+
   --font-mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-body: Inter, ui-sans-serif, system-ui, sans-serif;
   --radius-card: 12px;
@@ -36,15 +50,25 @@ body {
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #1e293b transparent;
+  scrollbar-color: #2b2539 transparent;
 }
 
 .font-mono {
   font-family: var(--font-geist-mono), var(--font-mono);
 }
 
+/* Soft pastel glow in two corners so the dark canvas isn't flat. */
+.app-bg {
+  background:
+    radial-gradient(1100px 560px at -8% -10%, color-mix(in srgb, var(--color-primary) 10%, transparent), transparent 62%),
+    radial-gradient(900px 520px at 108% 108%, color-mix(in srgb, var(--color-accent) 9%, transparent), transparent 62%),
+    var(--color-bg);
+}
+
 .card {
-  background: var(--color-card);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 38%),
+    var(--color-card);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-card);
 }
@@ -63,7 +87,8 @@ body {
 .btn-primary {
   background: var(--color-primary);
   border-color: var(--color-primary);
-  color: #fff;
+  color: var(--color-ink);
+  font-weight: 500;
 }
 
 .dot-live {
@@ -74,11 +99,29 @@ body {
   box-shadow: 0 0 8px var(--color-green);
 }
 
+.pixel {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
 input,
 textarea,
 select {
   font-family: inherit;
   color: var(--color-text);
+  color-scheme: dark;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: color-mix(in srgb, var(--color-muted) 75%, transparent);
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  border-color: color-mix(in srgb, var(--color-accent) 60%, transparent) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 14%, transparent);
 }
 
 .pri-high { color: var(--color-primary); }

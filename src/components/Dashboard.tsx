@@ -3,21 +3,22 @@
 import { useMemo, useState, type CSSProperties } from "react";
 import type { Lead, Reminder, ReminderPriority } from "@/lib/types";
 import { uid, useAsukaStore } from "@/lib/store";
-import { apptTime, hasAppointment, localToday } from "@/lib/crm";
+import { apptTime, hasAppointment, localToday, tint } from "@/lib/crm";
 import { Crm } from "./Crm";
 import { Customers, money } from "./Customers";
 
 type Tab = "overview" | "reminders" | "calendar" | "notes" | "files" | "crm" | "customers";
 type Store = ReturnType<typeof useAsukaStore>;
 
-const NAV: { id: Tab; label: string; icon: string }[] = [
-  { id: "overview", label: "Overview", icon: "▣" },
-  { id: "reminders", label: "Reminders", icon: "☑" },
-  { id: "calendar", label: "Calendar", icon: "▦" },
-  { id: "notes", label: "Notes", icon: "✎" },
-  { id: "files", label: "Attachments", icon: "▢" },
-  { id: "crm", label: "CRM", icon: "◈" },
-  { id: "customers", label: "Customers", icon: "$" },
+/** Every section owns a pastel hue, so the board doesn't collapse into one accent colour. */
+const NAV: { id: Tab; label: string; icon: string; hue: string }[] = [
+  { id: "overview", label: "Overview", icon: "▣", hue: "var(--color-primary)" },
+  { id: "reminders", label: "Reminders", icon: "☑", hue: "var(--color-amber)" },
+  { id: "calendar", label: "Calendar", icon: "▦", hue: "var(--color-accent)" },
+  { id: "notes", label: "Notes", icon: "✎", hue: "var(--color-lemon)" },
+  { id: "files", label: "Attachments", icon: "▢", hue: "var(--color-lilac)" },
+  { id: "crm", label: "CRM", icon: "◈", hue: "var(--color-violet)" },
+  { id: "customers", label: "Customers", icon: "$", hue: "var(--color-green)" },
 ];
 
 const PRI: ReminderPriority[] = ["low", "medium", "high"];
@@ -32,11 +33,11 @@ function fileKind(name: string, mime: string) {
   const m = mime.toLowerCase();
   if (m.includes("pdf") || ext === "PDF") return { label: "PDF", color: "var(--color-primary)" };
   if (ext === "XLSX" || ext === "XLS" || m.includes("spreadsheet")) return { label: "XLSX", color: "var(--color-green)" };
-  if (ext === "CSV") return { label: "CSV", color: "var(--color-accent)" };
+  if (ext === "CSV") return { label: "CSV", color: "var(--color-teal)" };
   if (ext === "DOCX" || ext === "DOC") return { label: "DOCX", color: "var(--color-accent)" };
   if (ext === "ZIP") return { label: "ZIP", color: "var(--color-amber)" };
-  if (ext === "MP4" || m.startsWith("video/")) return { label: "MP4", color: "#a78bfa" };
-  if (m.startsWith("image/")) return { label: ext.slice(0, 4) || "IMG", color: "var(--color-accent)" };
+  if (ext === "MP4" || m.startsWith("video/")) return { label: "MP4", color: "var(--color-lilac)" };
+  if (m.startsWith("image/")) return { label: ext.slice(0, 4) || "IMG", color: "var(--color-violet)" };
   return { label: ext.slice(0, 4) || "FILE", color: "var(--color-muted)" };
 }
 
@@ -58,7 +59,7 @@ export default function Dashboard({ lockable = false }: { lockable?: boolean }) 
   const pipeline = store.leads.filter((l) => l.stage !== "lost" && l.stage !== "closed_won");
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh", background: "var(--color-bg)", color: "var(--color-text)" }}>
+    <div className="app-bg" style={{ display: "flex", minHeight: "100vh", color: "var(--color-text)" }}>
       <aside
         style={{
           width: collapsed ? 60 : 220,
@@ -71,37 +72,41 @@ export default function Dashboard({ lockable = false }: { lockable?: boolean }) 
         }}
       >
         <div style={{ height: 56, display: "flex", alignItems: "center", gap: 10, padding: "0 14px", borderBottom: "1px solid var(--color-border)" }}>
-          <div style={{ width: 28, height: 28, borderRadius: 7, background: "var(--color-primary)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11, fontWeight: 500, flexShrink: 0 }}>AL</div>
+          {/* eslint-disable-next-line @next/next/no-img-element -- static pixel-art brand mark, no optimisation wanted */}
+          <img src="/icons/icon-64.png" alt="" width={32} height={32} className="pixel" style={{ borderRadius: 8, flexShrink: 0, boxShadow: `0 0 0 1px ${tint("var(--color-primary)", 45)}` }} />
           {!collapsed && (
             <div style={{ overflow: "hidden" }}>
-              <div style={{ fontSize: 10, letterSpacing: "0.18em", color: "var(--color-primary)", fontFamily: "var(--font-geist-mono), var(--font-mono)" }}>GROKBOT · AGENT</div>
-              <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>Command Center</div>
+              <div style={{ fontSize: 10, letterSpacing: "0.18em", color: "var(--color-primary)", fontFamily: "var(--font-geist-mono), var(--font-mono)", whiteSpace: "nowrap" }}>ASUKA · GROKBOT</div>
+              <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>Central Dogma</div>
             </div>
           )}
         </div>
         <nav style={{ padding: 10, display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
-          {NAV.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => setTab(item.id)}
-              title={item.label}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "9px 12px",
-                borderRadius: 7,
-                border: tab === item.id ? "1px solid rgba(255,45,85,0.35)" : "1px solid transparent",
-                background: tab === item.id ? "rgba(255,45,85,0.08)" : "transparent",
-                color: tab === item.id ? "var(--color-primary)" : "var(--color-muted)",
-                cursor: "pointer",
-                textAlign: "left",
-              }}
-            >
-              <span style={{ width: 20, textAlign: "center", flexShrink: 0 }}>{item.icon}</span>
-              {!collapsed && <span style={{ fontSize: 13, fontWeight: 500, letterSpacing: "0.02em" }}>{item.label}</span>}
-            </button>
-          ))}
+          {NAV.map((item) => {
+            const on = tab === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => setTab(item.id)}
+                title={item.label}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "9px 12px",
+                  borderRadius: 7,
+                  border: `1px solid ${on ? tint(item.hue, 45) : "transparent"}`,
+                  background: on ? tint(item.hue, 11) : "transparent",
+                  color: on ? item.hue : "var(--color-muted)",
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+              >
+                <span style={{ width: 20, textAlign: "center", flexShrink: 0, color: on ? item.hue : `color-mix(in srgb, ${item.hue} 55%, var(--color-muted))` }}>{item.icon}</span>
+                {!collapsed && <span style={{ fontSize: 13, fontWeight: 500, letterSpacing: "0.02em" }}>{item.label}</span>}
+              </button>
+            );
+          })}
         </nav>
         <div style={{ padding: 10, borderTop: "1px solid var(--color-border)" }}>
           <button
@@ -117,8 +122,8 @@ export default function Dashboard({ lockable = false }: { lockable?: boolean }) 
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
         <header style={{ height: 56, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px", borderBottom: "1px solid var(--color-border)", background: "var(--color-surface)" }}>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>Asuka Langley Command Center</div>
-            <div style={{ fontSize: 11, fontFamily: "var(--font-geist-mono), var(--font-mono)", color: "var(--color-muted)" }}>v2.4.1 · live SMS sync</div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Central Dogma</div>
+            <div style={{ fontSize: 11, fontFamily: "var(--font-geist-mono), var(--font-mono)", color: "var(--color-muted)" }}>Asuka Langley · v2.4.1 · live SMS sync</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11 }}>
@@ -146,7 +151,7 @@ export default function Dashboard({ lockable = false }: { lockable?: boolean }) 
 
         <main style={{ flex: 1, padding: 24, overflow: "auto" }}>
           {!store.hydrated ? (
-            <p style={{ color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 12 }}>Loading command center…</p>
+            <p style={{ color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 12 }}>Loading Central Dogma…</p>
           ) : tab === "overview" ? (
             <Overview store={store} dueToday={dueToday} openReminders={openReminders} pipeline={pipeline} setTab={setTab} />
           ) : tab === "reminders" ? (
@@ -174,12 +179,12 @@ export default function Dashboard({ lockable = false }: { lockable?: boolean }) 
   );
 }
 
-function Spark({ n, max = 8 }: { n: number; max?: number }) {
+function Spark({ n, max = 8, color = "var(--color-accent)" }: { n: number; max?: number; color?: string }) {
   const bars = Array.from({ length: 8 }, (_, i) => i < Math.min(8, Math.max(1, Math.round((n / Math.max(max, 1)) * 8))));
   return (
     <div style={{ display: "flex", gap: 2, alignItems: "flex-end", height: 18 }}>
       {bars.map((on, i) => (
-        <div key={i} style={{ width: 6, height: 6 + (on ? (i + 1) * 1.4 : 4), background: on ? "var(--color-accent)" : "rgba(255,255,255,0.06)", borderRadius: 1 }} />
+        <div key={i} style={{ width: 6, height: 6 + (on ? (i + 1) * 1.4 : 4), background: on ? color : tint("var(--color-text)", 7), borderRadius: 1 }} />
       ))}
     </div>
   );
@@ -198,7 +203,7 @@ function Overview({ store, dueToday, openReminders, pipeline, setTab }: { store:
   const activity = useMemo(() => {
     const rows: { t: string; type: string; color: string; label: string }[] = [];
     for (const r of store.reminders) {
-      rows.push({ t: r.createdAt, type: r.done ? "DONE" : "TASK", color: r.done ? "var(--color-green)" : priColor(r.priority), label: r.title });
+      rows.push({ t: r.createdAt, type: r.done ? "DONE" : "TASK", color: r.done ? "var(--color-teal)" : priColor(r.priority), label: r.title });
     }
     for (const l of store.leads) {
       rows.push({ t: l.createdAt, type: "LEAD", color: "var(--color-accent)", label: `${l.name} · ${l.company || "no org"}` });
@@ -215,25 +220,25 @@ function Overview({ store, dueToday, openReminders, pipeline, setTab }: { store:
   }, [store.reminders, store.leads, store.customers]);
 
   const tiles = [
-    { l: "DUE TODAY", v: dueToday.length, d: "SMS + board", t: "reminders" as Tab },
-    { l: "OPEN TASKS", v: openReminders.length, d: "until resolved", t: "reminders" as Tab },
-    { l: "PIPELINE", v: pipeline.length, d: "active leads", t: "crm" as Tab },
-    { l: "APPTS SET", v: apptsSet, d: apptsToday.length ? `${apptsToday.length} today` : "on the calendar", t: "crm" as Tab },
-    { l: "CUSTOMERS", v: store.customers.length, d: monthRevenue ? `${money(monthRevenue)} this month` : "paying clients", t: "customers" as Tab },
-    { l: "NOTES", v: store.notes.length, d: "pinned + free", t: "notes" as Tab },
-    { l: "FILES", v: store.attachments.length, d: "local vault", t: "files" as Tab },
+    { l: "DUE TODAY", v: dueToday.length, d: "SMS + board", t: "reminders" as Tab, hue: "var(--color-primary)" },
+    { l: "OPEN TASKS", v: openReminders.length, d: "until resolved", t: "reminders" as Tab, hue: "var(--color-amber)" },
+    { l: "PIPELINE", v: pipeline.length, d: "active leads", t: "crm" as Tab, hue: "var(--color-accent)" },
+    { l: "APPTS SET", v: apptsSet, d: apptsToday.length ? `${apptsToday.length} today` : "on the calendar", t: "crm" as Tab, hue: "var(--color-violet)" },
+    { l: "CUSTOMERS", v: store.customers.length, d: monthRevenue ? `${money(monthRevenue)} this month` : "paying clients", t: "customers" as Tab, hue: "var(--color-green)" },
+    { l: "NOTES", v: store.notes.length, d: "pinned + free", t: "notes" as Tab, hue: "var(--color-lemon)" },
+    { l: "FILES", v: store.attachments.length, d: "local vault", t: "files" as Tab, hue: "var(--color-lilac)" },
   ];
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
         {tiles.map((c) => (
-          <button key={c.l} onClick={() => setTab(c.t)} className="card" style={{ padding: 16, textAlign: "left", cursor: "pointer" }}>
-            <div style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 28, fontWeight: 500, letterSpacing: "-0.03em" }}>{c.v}</div>
+          <button key={c.l} onClick={() => setTab(c.t)} className="card" style={{ padding: 16, textAlign: "left", cursor: "pointer", boxShadow: `inset 0 2px 0 0 ${tint(c.hue, 70)}` }}>
+            <div style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 28, fontWeight: 500, letterSpacing: "-0.03em", color: c.hue }}>{c.v}</div>
             <div style={{ marginTop: 6, fontSize: 10, letterSpacing: "0.14em", color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)" }}>{c.l}</div>
             <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
-              <span style={{ fontSize: 11, color: "var(--color-accent)", fontFamily: "var(--font-geist-mono), var(--font-mono)" }}>{c.d}</span>
-              <Spark n={c.v} />
+              <span style={{ fontSize: 11, color: `color-mix(in srgb, ${c.hue} 80%, var(--color-muted))`, fontFamily: "var(--font-geist-mono), var(--font-mono)" }}>{c.d}</span>
+              <Spark n={c.v} color={c.hue} />
             </div>
           </button>
         ))}
@@ -325,7 +330,7 @@ function Reminders({ store }: { store: Store }) {
           ))}
         </div>
         <div style={{ display: "flex", gap: 6 }}>
-          <button type="button" onClick={() => setSource("asuka")} className="btn" style={{ padding: "6px 10px", background: source === "asuka" ? "var(--color-primary)" : "transparent", color: source === "asuka" ? "#fff" : "var(--color-muted)" }}>ASUKA</button>
+          <button type="button" onClick={() => setSource("asuka")} className="btn" style={{ padding: "6px 10px", background: source === "asuka" ? "var(--color-primary)" : "transparent", borderColor: source === "asuka" ? "var(--color-primary)" : "var(--color-border)", color: source === "asuka" ? "var(--color-ink)" : "var(--color-muted)" }}>ASUKA</button>
           <button type="button" onClick={() => setSource("manual")} className="btn" style={{ padding: "6px 10px", color: source === "manual" ? "var(--color-accent)" : "var(--color-muted)", borderColor: source === "manual" ? "var(--color-accent)" : "var(--color-border)" }}>MANUAL</button>
         </div>
         <button className="btn btn-primary" style={{ padding: 10 }}>ADD</button>
@@ -333,7 +338,7 @@ function Reminders({ store }: { store: Store }) {
       <div>
         <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
           {(["all", "active", "done"] as const).map((f) => (
-            <button key={f} onClick={() => setFilter(f)} className="btn" style={{ padding: "6px 12px", color: filter === f ? "#fff" : "var(--color-muted)", background: filter === f ? "var(--color-primary)" : "transparent" }}>{f.toUpperCase()}</button>
+            <button key={f} onClick={() => setFilter(f)} className="btn" style={{ padding: "6px 12px", color: filter === f ? "var(--color-ink)" : "var(--color-muted)", background: filter === f ? "var(--color-amber)" : "transparent", borderColor: filter === f ? "var(--color-amber)" : "var(--color-border)" }}>{f.toUpperCase()}</button>
           ))}
         </div>
         {list.length === 0 && <p style={{ color: "var(--color-muted)" }}>No reminders in this filter.</p>}
@@ -407,7 +412,7 @@ function CalendarView({ reminders, leads, monthOffset, setMonthOffset, onToggle 
             const isToday = iso === today;
             const isSel = iso === selected;
             return (
-              <button key={iso} onClick={() => setSelected(iso)} style={{ minHeight: 72, borderRadius: 8, border: `1px solid ${isSel ? "var(--color-primary)" : isToday ? "rgba(0,212,255,0.4)" : "var(--color-border)"}`, background: isSel ? "rgba(255,45,85,0.08)" : "transparent", padding: 6, textAlign: "left", cursor: "pointer", color: "inherit" }}>
+              <button key={iso} onClick={() => setSelected(iso)} style={{ minHeight: 72, borderRadius: 8, border: `1px solid ${isSel ? "var(--color-accent)" : isToday ? tint("var(--color-accent)", 45) : "var(--color-border)"}`, background: isSel ? tint("var(--color-accent)", 10) : isToday ? tint("var(--color-accent)", 4) : "transparent", padding: 6, textAlign: "left", cursor: "pointer", color: "inherit" }}>
                 <div style={{ fontSize: 11, fontFamily: "var(--font-geist-mono), var(--font-mono)", color: isToday ? "var(--color-accent)" : "var(--color-muted)" }}>{day}</div>
                 <div style={{ display: "flex", gap: 3, marginTop: 6, flexWrap: "wrap" }}>
                   {appts.slice(0, 4).map((l) => <span key={l.id} title={`${apptTime(l.appointmentAt ?? "")} ${l.name}`} style={{ width: 6, height: 6, borderRadius: 1, background: "var(--color-violet)" }} />)}
@@ -473,8 +478,8 @@ function Notes({ store }: { store: Store }) {
         </div>
         <div style={{ overflow: "auto", flex: 1 }}>
           {filtered.sort((a, b) => Number(b.pinned) - Number(a.pinned)).map((n) => (
-            <button key={n.id} onClick={() => setSel(n.id)} style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 8px", borderRadius: 7, border: n.id === sel ? "1px solid rgba(255,45,85,0.35)" : "1px solid transparent", background: n.id === sel ? "rgba(255,45,85,0.06)" : "transparent", color: "inherit", cursor: "pointer" }}>
-              <div style={{ fontSize: 13, fontWeight: 500 }}>{n.pinned ? "★ " : ""}{n.title}</div>
+            <button key={n.id} onClick={() => setSel(n.id)} style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 8px", borderRadius: 7, border: `1px solid ${n.id === sel ? tint("var(--color-lemon)", 45) : "transparent"}`, background: n.id === sel ? tint("var(--color-lemon)", 8) : "transparent", color: "inherit", cursor: "pointer" }}>
+              <div style={{ fontSize: 13, fontWeight: 500 }}>{n.pinned ? <span style={{ color: "var(--color-lemon)" }}>★ </span> : ""}{n.title}</div>
               <div style={{ fontSize: 11, color: "var(--color-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.body}</div>
             </button>
           ))}
@@ -502,7 +507,7 @@ function Notes({ store }: { store: Store }) {
 function Attachments({ store }: { store: Store }) {
   return (
     <div>
-      <label className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, marginBottom: 16, cursor: "pointer", borderStyle: "dashed" }}>
+      <label className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, marginBottom: 16, cursor: "pointer", borderStyle: "dashed", borderColor: tint("var(--color-lilac)", 35) }}>
         <p style={{ fontWeight: 500 }}>Drop files or click to upload</p>
         <p style={{ marginTop: 4, fontSize: 12, color: "var(--color-muted)", fontFamily: "var(--font-geist-mono), var(--font-mono)" }}>STORED IN THIS BROWSER · SYNCED WITH VAULT JSON</p>
         <input type="file" multiple className="hidden" onChange={(e) => {
@@ -528,7 +533,7 @@ function Attachments({ store }: { store: Store }) {
           const k = fileKind(a.name, a.mime);
           return (
             <div key={a.id} style={{ display: "grid", gridTemplateColumns: "40px 1fr 70px 80px 120px 70px", gap: 8, padding: "10px 14px", alignItems: "center", borderTop: "1px solid var(--color-border)", fontSize: 13 }}>
-              <div style={{ width: 28, height: 28, borderRadius: 6, background: "rgba(255,255,255,0.04)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: k.color }}>{k.label.slice(0, 1)}</div>
+              <div style={{ width: 28, height: 28, borderRadius: 6, background: tint(k.color, 14), display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: k.color, fontFamily: "var(--font-geist-mono), var(--font-mono)" }}>{k.label.slice(0, 1)}</div>
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</span>
               <span style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11, color: k.color }}>{k.label}</span>
               <span style={{ fontFamily: "var(--font-geist-mono), var(--font-mono)", fontSize: 11, color: "var(--color-muted)" }}>{fmtBytes(a.size)}</span>

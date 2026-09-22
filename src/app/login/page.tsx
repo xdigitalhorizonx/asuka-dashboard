@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { MONO } from "@/lib/crm";
+import { MONO, tint } from "@/lib/crm";
 
 const inp: CSSProperties = {
   width: "100%",
@@ -18,13 +18,14 @@ export default async function LoginPage({
 }) {
   const { e, next } = await searchParams;
   return (
-    <main style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: "var(--color-bg)", color: "var(--color-text)", padding: 24 }}>
+    <main className="app-bg" style={{ minHeight: "100vh", display: "grid", placeItems: "center", color: "var(--color-text)", padding: 24 }}>
       <form method="post" action="/api/login" className="card" style={{ width: "min(360px, 100%)", padding: 28, display: "grid", gap: 14 }}>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <div style={{ width: 28, height: 28, borderRadius: 7, background: "var(--color-primary)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: MONO, fontSize: 11, fontWeight: 500 }}>AL</div>
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- static pixel-art brand mark, no optimisation wanted */}
+          <img src="/icons/icon-192.png" alt="" width={48} height={48} className="pixel" style={{ borderRadius: 11, flexShrink: 0, boxShadow: `0 0 0 1px ${tint("var(--color-primary)", 45)}, 0 0 18px ${tint("var(--color-primary)", 25)}` }} />
           <div>
-            <div style={{ fontSize: 10, letterSpacing: "0.18em", color: "var(--color-primary)", fontFamily: MONO }}>GROKBOT · AGENT</div>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>Command Center</div>
+            <div style={{ fontSize: 10, letterSpacing: "0.18em", color: "var(--color-primary)", fontFamily: MONO }}>ASUKA LANGLEY · GROKBOT</div>
+            <div style={{ fontSize: 15, fontWeight: 600 }}>Central Dogma</div>
           </div>
         </div>
         <p style={{ fontSize: 12, color: "var(--color-muted)", margin: 0 }}>Private board. Enter the access password to continue.</p>
