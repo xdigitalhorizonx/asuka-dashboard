@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * One-time setup: mint the Google refresh token that lets Central Dogma read and
- * write brandon@digitalhorizon.dev's Google Tasks.
+ * Alternative to the in-app "Connect Google" button: mint the Google refresh token
+ * that lets Central Dogma read and write brandon@digitalhorizon.dev's Google Tasks
+ * and read his Google Calendar, for GOOGLE_TASKS_REFRESH_TOKEN.
  *
  *   GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... node scripts/google-tasks-auth.mjs
  *   node scripts/google-tasks-auth.mjs --client-id ... --client-secret ... [--account you@example.com]
@@ -29,7 +30,7 @@ if (!clientId || !clientSecret) {
   process.exit(1);
 }
 
-const SCOPES = ["openid", "email", "https://www.googleapis.com/auth/tasks"];
+const SCOPES = ["openid", "email", "https://www.googleapis.com/auth/tasks", "https://www.googleapis.com/auth/calendar.events"];
 const state = randomBytes(16).toString("hex");
 
 const server = http.createServer();
@@ -48,7 +49,7 @@ authUrl.search = new URLSearchParams({
   state,
 }).toString();
 
-console.log(`\nSign in as ${account} and approve access to Google Tasks.\nIf a browser didn't open, paste this URL into one:\n\n${authUrl}\n`);
+console.log(`\nSign in as ${account} and approve access to Google Tasks and Calendar.\nIf a browser didn't open, paste this URL into one:\n\n${authUrl}\n`);
 openBrowser(authUrl.toString());
 
 const code = await new Promise((resolve, reject) => {

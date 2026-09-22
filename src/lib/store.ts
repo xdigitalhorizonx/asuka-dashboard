@@ -6,6 +6,7 @@ import {
   normalizeLeads,
   type AppState,
   type Attachment,
+  type CalendarEvent,
   type Customer,
   type Lead,
   type Note,
@@ -35,6 +36,22 @@ const seed: AppState = {
   customers: [],
 };
 
+/** The Google link as the server reports it (never the token). Mirrors googleStatus() in lib/google.ts. */
+export interface GoogleStatus {
+  /** GOOGLE_CLIENT_ID / SECRET exist on the deployment, so Connect can run. */
+  configured: boolean;
+  connected: boolean;
+  /** The one account allowed to connect. */
+  account: string;
+  email?: string;
+  via?: "env" | "vault";
+  connectedAt?: string;
+  tasks: boolean;
+  calendar: boolean;
+}
+
+const NO_GOOGLE: GoogleStatus = { configured: false, connected: false, account: "", tasks: false, calendar: false };
+
 /** Where reminders are coming from, as reported by the server. */
 export interface RemindersInfo {
   source: RemindersBackend;
@@ -49,7 +66,10 @@ type ServerPayload = Partial<AppState> & {
   remindersList?: string;
   remindersError?: string;
   remindersPending?: number;
+  google?: GoogleStatus;
 };
+
+type Remote = { state: AppState; info: RemindersInfo; google?: GoogleStatus };
 
 function normalize(parsed: Partial<AppState> | null | undefined): AppState {
   return {
@@ -81,12 +101,12 @@ function loadLocal(): AppState {
   }
 }
 
-async function fetchServer(): Promise<{ state: AppState; info: RemindersInfo } | null> {
+async function fetchServer(): Promise<Remote | null> {
   try {
     const res = await fetch("/api/state", { cache: "no-store" });
     if (!res.ok) return null;
     const p = (await res.json()) as ServerPayload;
-    return { state: normalize(p), info: infoOf(p) };
+    return { state: normalize(p), info: infoOf(p), ...(p.google ? { google: p.google } : {}) };
   } catch {
     return null;
   }
@@ -127,6 +147,7 @@ export function useAsukaStore() {
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [remindersInfo, setRemindersInfo] = useState<RemindersInfo>({ source: "vault" });
+  const [google, setGoogle] = useState<GoogleStatus>(NO_GOOGLE);
   const [remindersBusy, setRemindersBusy] = useState(false);
   const skipNextPersist = useRef(true);
   const lastLocalWrite = useRef(0);
@@ -144,6 +165,7 @@ export function useAsukaStore() {
       if (!cancelled && remote) {
         setState(remote.state);
         setRemindersInfo(remote.info);
+        if (remote.google) setGoogle(remote.google);
         setSyncedAt(new Date().toISOString());
         localStorage.setItem(KEY, JSON.stringify(remote.state));
       }
@@ -174,10 +196,11 @@ export function useAsukaStore() {
     return () => clearTimeout(t);
   }, [state, hydrated]);
 
-  const adoptRemote = useCallback((remote: { state: AppState; info: RemindersInfo }) => {
+  const adoptRemote = useCallback((remote: Remote) => {
     skipNextPersist.current = true;
     setState(remote.state);
     setRemindersInfo(remote.info);
+    if (remote.google) setGoogle(remote.google);
     setSyncedAt(new Date().toISOString());
     try {
       localStorage.setItem(KEY, JSON.stringify(remote.state));
@@ -197,6 +220,7 @@ export function useAsukaStore() {
       const next = JSON.stringify(remote.state);
       if (local === next) {
         setRemindersInfo(remote.info);
+        if (remote.google) setGoogle(remote.google);
         setSyncedAt(new Date().toISOString());
         return;
       }
@@ -219,15 +243,16 @@ export function useAsukaStore() {
    * Reminders change through /api/reminders (Google Tasks or the vault, server's
    * choice), not by posting the whole board. Optimistic locally, then the server's
    * fresh list replaces ours; on failure we re-pull so the UI never shows a phantom.
+   * /api/google/disconnect answers with the same payload shape, so it shares the path.
    */
-  const reminderCall = useCallback(
-    async (body: ReminderAction) => {
+  const serverCall = useCallback(
+    async (url: string, body?: ReminderAction) => {
       setRemindersBusy(true);
       try {
-        const res = await fetch("/api/reminders", {
+        const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
+          ...(body ? { body: JSON.stringify(body) } : {}),
         });
         const p = (await res.json().catch(() => ({}))) as ServerPayload & { error?: string };
         if (!res.ok) {
@@ -240,6 +265,7 @@ export function useAsukaStore() {
         lastLocalWrite.current = Date.now();
         setState((s) => ({ ...s, reminders: p.reminders ?? s.reminders }));
         setRemindersInfo(infoOf(p));
+        if (p.google) setGoogle(p.google);
         setSyncError(null);
         setSyncedAt(new Date().toISOString());
       } catch {
@@ -250,6 +276,9 @@ export function useAsukaStore() {
     },
     [adoptRemote]
   );
+  const reminderCall = useCallback((body: ReminderAction) => serverCall("/api/reminders", body), [serverCall]);
+  /** Revoke the in-app Google grant; reminders fall back to the vault and the calendar goes quiet. */
+  const disconnectGoogle = useCallback(() => serverCall("/api/google/disconnect"), [serverCall]);
 
   const optimistic = useCallback((fn: (prev: Reminder[]) => Reminder[]) => {
     skipNextPersist.current = true;
@@ -351,6 +380,8 @@ export function useAsukaStore() {
     remindersError: remindersInfo.error,
     remindersPending: remindersInfo.pending ?? 0,
     remindersBusy,
+    google,
+    disconnectGoogle,
     addReminder,
     toggleReminder,
     removeReminder,
@@ -364,6 +395,57 @@ export function useAsukaStore() {
     exportJson,
     importJson,
   };
+}
+
+export interface CalendarInfo {
+  events: CalendarEvent[];
+  /** false until the server confirms Google Calendar is linked with the calendar scope. */
+  connected: boolean;
+  error?: string;
+}
+
+const NO_CALENDAR: CalendarInfo = { events: [], connected: false };
+const CALENDAR_POLL_MS = 120_000;
+
+/**
+ * Google Calendar events for a local date window (inclusive), refreshed on focus
+ * and every couple of minutes while visible. Nothing is fetched while `enabled`
+ * is false (Google not connected / calendar scope not granted).
+ */
+export function useCalendarEvents(from: string, to: string, enabled: boolean): CalendarInfo {
+  const [info, setInfo] = useState<CalendarInfo>(NO_CALENDAR);
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/calendar?from=${from}&to=${to}`, { cache: "no-store" });
+        const p = (await res.json().catch(() => ({}))) as Partial<CalendarInfo> & { error?: string };
+        if (cancelled) return;
+        if (!res.ok) {
+          setInfo({ events: [], connected: true, error: p.error || `HTTP ${res.status}` });
+          return;
+        }
+        setInfo({ events: p.events ?? [], connected: !!p.connected, ...(p.error ? { error: p.error } : {}) });
+      } catch {
+        if (!cancelled) setInfo({ events: [], connected: true, error: "offline" });
+      }
+    };
+    void load();
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, CALENDAR_POLL_MS);
+    const onVis = () => {
+      if (document.visibilityState === "visible") void load();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [from, to, enabled]);
+  return enabled ? info : NO_CALENDAR;
 }
 
 export function uid(prefix = "id") {

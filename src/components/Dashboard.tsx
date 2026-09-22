@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState, useSyncExternalStore } from "react";
-import type { Lead, Reminder, ReminderPriority } from "@/lib/types";
-import { uid, useAsukaStore } from "@/lib/store";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import type { CalendarEvent, Lead, Reminder, ReminderPriority } from "@/lib/types";
+import { uid, useAsukaStore, useCalendarEvents } from "@/lib/store";
 import { apptTime, hasAppointment, localToday, tint } from "@/lib/crm";
 import { haptic } from "@/lib/haptics";
 import { Icon } from "./icons";
@@ -61,11 +61,54 @@ function fmtBytes(n: number) {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// ── Google Calendar helpers ──
+const isoDay = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const fmtClock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+/** Local calendar days an event occupies. Google's all-day `end` is exclusive (the day after). */
+function eventDays(e: CalendarEvent): string[] {
+  if (!e.allDay) return [isoDay(new Date(e.start))];
+  const days: string[] = [];
+  const end = new Date(`${e.end}T00:00:00`);
+  for (let d = new Date(`${e.start}T00:00:00`), i = 0; d < end && i < 62; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1), i++) days.push(isoDay(d));
+  return days.length ? days : [e.start];
+}
+function eventTime(e: CalendarEvent): string {
+  return e.allDay ? "all-day" : `${fmtClock(e.start)} – ${fmtClock(e.end)}`;
+}
+function eventsByDay(events: CalendarEvent[]): Record<string, CalendarEvent[]> {
+  const map: Record<string, CalendarEvent[]> = {};
+  for (const e of events) for (const day of eventDays(e)) (map[day] ??= []).push(e);
+  for (const k of Object.keys(map)) map[k].sort((a, b) => Number(b.allDay) - Number(a.allDay) || a.start.localeCompare(b.start));
+  return map;
+}
+
+/** Status the Google callback appends to the URL (`/?google=…#reminders`); read once, on the client. */
+function readGoogleNotice(): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get("google");
+}
+function describeGoogleNotice(status: string, account: string): { ok: boolean; text: string } {
+  if (status === "connected") return { ok: true, text: "Google connected — Tasks and Calendar are live on this board." };
+  if (status === "state-mismatch") return { ok: false, text: "That Google sign-in expired or was started in another tab. Press Connect again." };
+  if (status.startsWith("wrong-account:")) return { ok: false, text: `Signed in as ${status.slice(14)} — only ${account || "the configured account"} can connect. Switch Google accounts and try again.` };
+  if (status === "missing-tasks-scope") return { ok: false, text: "Google Tasks access wasn't granted. Connect again and allow every permission." };
+  if (status.startsWith("denied:")) return { ok: false, text: `Google sign-in was cancelled (${status.slice(7)}).` };
+  if (status === "not-configured") return { ok: false, text: "Google isn't configured on this deployment — GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are missing." };
+  if (status.startsWith("error:")) return { ok: false, text: `Google connect failed: ${status.slice(6)}` };
+  return { ok: false, text: `Google connect: ${status}` };
+}
+
 export default function Dashboard({ lockable = false }: { lockable?: boolean }) {
   const store = useAsukaStore();
   // Section = URL hash (#customers etc.). Server snapshot is null so hydration always starts on Overview.
   const tab = useSyncExternalStore(subscribeHash, readHashTab, () => null) ?? "overview";
   const [monthOffset, setMonthOffset] = useState(0);
+  // Outcome of a Google connect round-trip, carried in the query string by /api/google/callback.
+  const [googleNotice, setGoogleNotice] = useState<string | null>(readGoogleNotice);
+  useEffect(() => {
+    if (readGoogleNotice()) window.history.replaceState(null, "", window.location.pathname + window.location.hash);
+  }, []);
 
   const today = localToday();
   const openReminders = store.reminders.filter((r) => !r.done);
@@ -146,11 +189,12 @@ export default function Dashboard({ lockable = false }: { lockable?: boolean }) 
               {tab === "overview" ? (
                 <Overview store={store} dueToday={dueToday} openReminders={openReminders} pipeline={pipeline} setTab={go} />
               ) : tab === "reminders" ? (
-                <Reminders store={store} />
+                <Reminders store={store} notice={googleNotice} dismissNotice={() => setGoogleNotice(null)} />
               ) : tab === "calendar" ? (
                 <CalendarView
                   reminders={store.reminders}
                   leads={store.leads}
+                  googleCalendar={store.google.calendar}
                   monthOffset={monthOffset}
                   setMonthOffset={setMonthOffset}
                   onToggle={(id) => store.toggleReminder(id)}
@@ -191,6 +235,8 @@ function Overview({ store, dueToday, openReminders, pipeline, setTab }: { store:
     .filter((l) => hasAppointment(l) && l.appointmentAt.slice(0, 10) === today)
     .sort((a, b) => (a.appointmentAt || "").localeCompare(b.appointmentAt || ""));
   const apptsSet = store.leads.filter((l) => l.stage === "appointment_set").length;
+  const cal = useCalendarEvents(today, today, store.google.calendar);
+  const eventsToday = useMemo(() => eventsByDay(cal.events)[today] ?? [], [cal.events, today]);
   const ym = today.slice(0, 7);
   const monthRevenue = store.customers.reduce((s, c) => s + c.transactions.filter((t) => t.date.startsWith(ym)).reduce((a, t) => a + t.amount, 0), 0);
   const activity = useMemo(() => {
@@ -250,7 +296,17 @@ function Overview({ store, dueToday, openReminders, pipeline, setTab }: { store:
         </section>
         <section className="card" style={{ padding: 18 }}>
           <h2 className="card-title">Today</h2>
-          {schedule.length === 0 && apptsToday.length === 0 && <p style={{ color: "var(--color-muted)", fontSize: 13 }}>Nothing due today.</p>}
+          {schedule.length === 0 && apptsToday.length === 0 && eventsToday.length === 0 && <p style={{ color: "var(--color-muted)", fontSize: 13 }}>Nothing due today.</p>}
+          {cal.error && <p style={{ margin: "0 0 8px", fontSize: 13, color: "var(--color-danger)" }}>Google Calendar · {cal.error}</p>}
+          {eventsToday.map((e) => (
+            <div key={e.id} style={{ display: "flex", gap: 12, padding: "10px 0", borderTop: "1px solid var(--color-border)" }}>
+              <div style={{ width: 3, borderRadius: 2, background: "var(--color-sky)" }} />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, color: "var(--color-sky)" }}>{eventTime(e)} · CALENDAR</div>
+                <div style={{ fontSize: 13 }}>{e.title}{e.location ? <span style={{ color: "var(--color-muted)" }}> · {e.location}</span> : null}</div>
+              </div>
+            </div>
+          ))}
           {apptsToday.map((l) => (
             <div key={l.id} style={{ display: "flex", gap: 12, padding: "10px 0", borderTop: "1px solid var(--color-border)" }}>
               <div style={{ width: 3, borderRadius: 2, background: "var(--color-violet)" }} />
@@ -287,7 +343,71 @@ function Overview({ store, dueToday, openReminders, pipeline, setTab }: { store:
   );
 }
 
-function Reminders({ store }: { store: Store }) {
+function GoogleCard({ store }: { store: Store }) {
+  const g = store.google;
+  const dot = g.connected ? "var(--color-mint)" : g.configured ? "var(--color-amber)" : "var(--color-muted)";
+  const chip = (label: string, on: boolean, hue: string) => (
+    <span className="label" style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 8px", borderRadius: 999, color: on ? hue : "var(--color-muted)", border: `1px solid ${on ? tint(hue, 50) : "var(--color-border)"}`, background: on ? tint(hue, 10) : "transparent" }}>
+      <span style={{ width: 5, height: 5, borderRadius: "50%", background: on ? hue : "var(--color-muted)" }} />
+      {label} {on ? "✓" : "—"}
+    </span>
+  );
+  return (
+    <section className="card" style={{ padding: 18, display: "grid", gap: 10, boxShadow: `inset 0 2px 0 0 ${tint(dot, 70)}` }}>
+      <h2 className="card-title" style={{ marginBottom: 0, display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ width: 6, height: 6, borderRadius: "50%", background: dot, boxShadow: `0 0 6px ${dot}` }} />
+        Google account
+      </h2>
+      {!g.configured ? (
+        <p style={{ margin: 0, fontSize: 13, color: "var(--color-muted)" }}>
+          Not set up on this deployment. Add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> in Vercel, redeploy, then connect here.
+        </p>
+      ) : !g.connected ? (
+        <>
+          <p style={{ margin: 0, fontSize: 13, color: "var(--color-muted)" }}>
+            Sign in as <span style={{ color: "var(--color-text)" }}>{g.account}</span> to back reminders with Google Tasks and put Google Calendar on the board.
+          </p>
+          <a href="/api/google/connect" className="btn btn-primary" style={{ padding: 10, textAlign: "center", textDecoration: "none" }} onClick={() => haptic("tap")}>
+            Connect Google
+          </a>
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: 14, fontWeight: 500, overflowWrap: "anywhere" }}>{g.email || g.account}</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {chip("Tasks", g.tasks, "var(--color-mint)")}
+            {chip("Calendar", g.calendar, "var(--color-sky)")}
+          </div>
+          <p style={{ margin: 0, fontSize: 12, color: "var(--color-muted)" }}>
+            {g.via === "env"
+              ? "Token comes from GOOGLE_TASKS_REFRESH_TOKEN — remove that env var in Vercel to disconnect."
+              : `Connected ${g.connectedAt ? new Date(g.connectedAt).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : ""} · token stored encrypted in the vault.`}
+          </p>
+          {!g.calendar && (
+            <a href="/api/google/connect" className="btn" style={{ textAlign: "center", textDecoration: "none" }}>Reconnect to add Calendar</a>
+          )}
+          {g.via === "vault" && (
+            <button
+              type="button"
+              className="btn btn-danger"
+              disabled={store.remindersBusy}
+              onClick={() => {
+                if (window.confirm(`Disconnect ${g.email || g.account}? Reminders go back to the local vault and Google Calendar disappears from the board. Nothing in Google is deleted.`)) {
+                  haptic("tap");
+                  void store.disconnectGoogle();
+                }
+              }}
+            >
+              {store.remindersBusy ? "Working…" : "Disconnect"}
+            </button>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function Reminders({ store, notice, dismissNotice }: { store: Store; notice: string | null; dismissNotice: () => void }) {
   const [filter, setFilter] = useState<"all" | "active" | "done">("active");
   const [title, setTitle] = useState("");
   const [dueAt, setDueAt] = useState(localToday());
@@ -305,8 +425,12 @@ function Reminders({ store }: { store: Store }) {
       ? `Google Tasks · ${store.remindersList || ""}`
       : "Local vault · Google Tasks not connected";
 
+  const noticeView = notice ? describeGoogleNotice(notice, store.google.account) : null;
+  const noticeHue = noticeView?.ok ? "var(--color-mint)" : "var(--color-danger)";
+
   return (
     <div className="split split-left" style={{ ["--split-w" as string]: "320px" }}>
+      <div style={{ display: "grid", gap: 12, height: "fit-content" }}>
       <form
         className="card"
         style={{ padding: 18, height: "fit-content", display: "grid", gap: 10 }}
@@ -337,12 +461,21 @@ function Reminders({ store }: { store: Store }) {
         </div>
         <button className="btn btn-primary" style={{ padding: 10 }}>ADD</button>
       </form>
+      <GoogleCard store={store} />
+      </div>
       <div>
+        {noticeView && (
+          <div role="status" className="card" style={{ padding: "12px 14px", marginBottom: 12, display: "flex", gap: 10, alignItems: "center", borderColor: tint(noticeHue, 45), background: tint(noticeHue, 8) }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: noticeHue, boxShadow: `0 0 6px ${noticeHue}`, flexShrink: 0 }} />
+            <span style={{ fontSize: 14, flex: 1 }}>{noticeView.text}</span>
+            <button type="button" className="btn btn-ghost" onClick={dismissNotice} aria-label="Dismiss" style={{ padding: "4px 8px" }}>×</button>
+          </div>
+        )}
         <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
           {(["all", "active", "done"] as const).map((f) => (
             <button key={f} type="button" onClick={() => setFilter(f)} className={`btn${filter === f ? " btn-primary" : ""}`} aria-pressed={filter === f}>{f.toUpperCase()}</button>
           ))}
-          <span className="label" title={store.remindersError || (google ? "Reminders are read from and written to this Google Tasks list" : "Set the GOOGLE_* env vars to back reminders with Google Tasks")} style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, color: badgeColor }}>
+          <span className="label" title={store.remindersError || (google ? "Reminders are read from and written to this Google Tasks list" : "Press Connect Google to back reminders with Google Tasks")} style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, color: badgeColor }}>
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: badgeColor, boxShadow: `0 0 6px ${badgeColor}` }} />
             {badge}
           </span>
@@ -391,13 +524,17 @@ function Reminders({ store }: { store: Store }) {
   );
 }
 
-function CalendarView({ reminders, leads, monthOffset, setMonthOffset, onToggle }: { reminders: Reminder[]; leads: Lead[]; monthOffset: number; setMonthOffset: (n: number | ((p: number) => number)) => void; onToggle: (id: string) => void }) {
+function CalendarView({ reminders, leads, googleCalendar, monthOffset, setMonthOffset, onToggle }: { reminders: Reminder[]; leads: Lead[]; googleCalendar: boolean; monthOffset: number; setMonthOffset: (n: number | ((p: number) => number)) => void; onToggle: (id: string) => void }) {
   const [selected, setSelected] = useState<string | null>(localToday());
   const view = useMemo(() => {
     const now = new Date();
     const d = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
-    return { year: d.getFullYear(), month: d.getMonth(), startDow: new Date(d.getFullYear(), d.getMonth(), 1).getDay(), daysInMonth: new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(), label: d.toLocaleString("en-US", { month: "long", year: "numeric" }) };
+    const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    return { year: d.getFullYear(), month: d.getMonth(), startDow: new Date(d.getFullYear(), d.getMonth(), 1).getDay(), daysInMonth, label: d.toLocaleString("en-US", { month: "long", year: "numeric" }), from: `${d.getFullYear()}-${mm}-01`, to: `${d.getFullYear()}-${mm}-${String(daysInMonth).padStart(2, "0")}` };
   }, [monthOffset]);
+  const cal = useCalendarEvents(view.from, view.to, googleCalendar);
+  const evByDay = useMemo(() => eventsByDay(cal.events), [cal.events]);
   const byDay = useMemo(() => {
     const map: Record<string, Reminder[]> = {};
     for (const r of reminders) (map[r.dueAt] ??= []).push(r);
@@ -415,6 +552,7 @@ function CalendarView({ reminders, leads, monthOffset, setMonthOffset, onToggle 
   const cells: (number | null)[] = [...Array(view.startDow).fill(null), ...Array.from({ length: view.daysInMonth }, (_, i) => i + 1)];
   const detail = selected ? byDay[selected] ?? [] : [];
   const detailAppts = selected ? apptByDay[selected] ?? [] : [];
+  const detailEvents = selected ? evByDay[selected] ?? [] : [];
   const today = localToday();
 
   return (
@@ -434,12 +572,14 @@ function CalendarView({ reminders, leads, monthOffset, setMonthOffset, onToggle 
             const iso = `${view.year}-${String(view.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
             const items = byDay[iso] ?? [];
             const appts = apptByDay[iso] ?? [];
+            const events = evByDay[iso] ?? [];
             const isToday = iso === today;
             const isSel = iso === selected;
             return (
               <button key={iso} type="button" onClick={() => setSelected(iso)} className="cal-cell" aria-pressed={isSel} style={{ borderRadius: 12, border: `1px solid ${isSel ? "var(--color-selected-edge)" : isToday ? "rgba(113,218,202,0.55)" : "var(--color-border)"}`, background: isSel ? "var(--color-selected)" : "transparent", padding: 6, textAlign: "left", cursor: "pointer", color: "inherit", minWidth: 0, transition: "background-color 200ms, border-color 200ms" }}>
                 <div style={{ fontSize: 13, color: isToday ? "var(--color-accent)" : "var(--color-muted)" }}>{day}</div>
-                <div style={{ display: "flex", gap: 3, marginTop: 6, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 3, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  {events.slice(0, 3).map((e) => <span key={e.id} title={`${eventTime(e)} ${e.title}`} style={{ width: 10, height: 4, borderRadius: 2, background: "var(--color-sky)" }} />)}
                   {appts.slice(0, 4).map((l) => <span key={l.id} title={`${apptTime(l.appointmentAt ?? "")} ${l.name}`} style={{ width: 6, height: 6, borderRadius: 1, background: "var(--color-violet)" }} />)}
                   {items.slice(0, 4).map((r) => <span key={r.id} style={{ width: 6, height: 6, borderRadius: "50%", background: r.done ? "var(--color-muted)" : priColor(r.priority) }} />)}
                 </div>
@@ -447,14 +587,27 @@ function CalendarView({ reminders, leads, monthOffset, setMonthOffset, onToggle 
             );
           })}
         </div>
-        <div style={{ display: "flex", gap: 14, marginTop: 10, fontSize: 12, fontWeight: 500, letterSpacing: "0.06em", color: "var(--color-muted)" }}>
+        <div style={{ display: "flex", gap: 14, marginTop: 10, fontSize: 12, fontWeight: 500, letterSpacing: "0.06em", color: "var(--color-muted)", flexWrap: "wrap" }}>
+          {googleCalendar && <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 4, borderRadius: 2, background: "var(--color-sky)" }} />GOOGLE CALENDAR</span>}
           <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: 1, background: "var(--color-violet)" }} />APPOINTMENT</span>
           <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-amber)" }} />REMINDER</span>
+          {!googleCalendar && <a href="#reminders" style={{ marginLeft: "auto", color: "var(--color-sky)", textDecoration: "none" }}>CONNECT GOOGLE CALENDAR →</a>}
         </div>
+        {cal.error && <p style={{ margin: "10px 0 0", fontSize: 13, color: "var(--color-danger)" }}>Google Calendar · {cal.error}</p>}
       </div>
       <aside className="card" style={{ padding: 18 }}>
         <h2 className="card-title">{selected || "Day"}</h2>
-        {detail.length === 0 && detailAppts.length === 0 && <p style={{ color: "var(--color-muted)", fontSize: 13 }}>No events this day.</p>}
+        {detail.length === 0 && detailAppts.length === 0 && detailEvents.length === 0 && <p style={{ color: "var(--color-muted)", fontSize: 13 }}>No events this day.</p>}
+        {detailEvents.map((e) => (
+          <div key={e.id} style={{ padding: "10px 0", borderTop: "1px solid var(--color-border)" }}>
+            <div style={{ fontSize: 13, color: "var(--color-sky)" }}>{eventTime(e)} · CALENDAR</div>
+            <div>{e.title}</div>
+            <div style={{ fontSize: 13, color: "var(--color-muted)", display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <span>{e.location || "—"}</span>
+              {e.link && <a href={e.link} target="_blank" rel="noreferrer" style={{ color: "var(--color-sky)", textDecoration: "none" }}>Open in Google ↗</a>}
+            </div>
+          </div>
+        ))}
         {detailAppts.map((l) => (
           <div key={l.id} style={{ padding: "10px 0", borderTop: "1px solid var(--color-border)" }}>
             <div style={{ fontSize: 13, color: "var(--color-violet)" }}>{apptTime(l.appointmentAt ?? "")} · APPOINTMENT</div>

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { isCrmStage, normalizeLead, normalizeReminder, type AppState, type Lead, type Reminder } from "@/lib/types";
 import { assertSyncAuth, readState, writeState } from "@/lib/server-state";
-import { GoogleTasksError } from "@/lib/google-tasks";
+import { GoogleApiError, googleStatus } from "@/lib/google";
 import {
   clientPayload,
   errorMessage,
@@ -47,21 +47,23 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "action required" }, { status: 400 });
   }
 
-  if (body.action === "ping") {
-    return NextResponse.json({ ok: true, service: "asuka-dashboard-sync", reminders: remindersBackend() });
-  }
-
   try {
     let state = await readState();
 
+    if (body.action === "ping") {
+      return NextResponse.json({ ok: true, service: "asuka-dashboard-sync", reminders: remindersBackend(state), google: googleStatus(state) });
+    }
+
     switch (body.action) {
       case "set_state": {
-        // Reminders are owned by the reminders backend; a whole-state push keeps the server's copy + sidecar.
-        const google = remindersBackend() === "google";
+        // Reminders are owned by the reminders backend; a whole-state push keeps the server's
+        // copy, the sidecar and the Google link — none of which Asuka ever sees.
+        const google = remindersBackend(state) === "google";
         state = await writeState({
           ...body.state,
           ...(google ? { reminders: state.reminders } : {}),
           ...(state.reminderMeta ? { reminderMeta: state.reminderMeta } : {}),
+          ...(state.google ? { google: state.google } : {}),
         });
         break;
       }
@@ -123,9 +125,9 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "unknown action" }, { status: 400 });
     }
 
-    return NextResponse.json(clientPayload(state, await listReminders(state)));
+    return NextResponse.json(clientPayload(state, await listReminders(state), { google: googleStatus(state) }));
   } catch (err) {
-    const status = err instanceof GoogleTasksError ? 502 : 500;
+    const status = err instanceof GoogleApiError ? 502 : 500;
     return NextResponse.json({ error: errorMessage(err) || "sync failed" }, { status });
   }
 }
@@ -136,7 +138,7 @@ export async function GET(req: Request) {
   }
   try {
     const state = await readState();
-    return NextResponse.json(clientPayload(state, await listReminders(state)));
+    return NextResponse.json(clientPayload(state, await listReminders(state), { google: googleStatus(state) }));
   } catch (err) {
     return NextResponse.json({ error: errorMessage(err) || "Failed to read state" }, { status: 500 });
   }

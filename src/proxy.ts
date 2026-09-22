@@ -11,6 +11,7 @@ const OPEN = [
   "/api/logout",
   "/api/sync",
   "/api/stripe/webhook",
+  "/api/google/callback", // Google's redirect carries no session; guarded by its own state cookie
   "/manifest.webmanifest",
   "/apple-touch-icon.png",
   "/icons",

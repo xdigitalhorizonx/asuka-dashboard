@@ -1,8 +1,8 @@
 import { put, list } from "@vercel/blob";
 import { promises as fs } from "fs";
 import path from "path";
-import { googleTasksEnabled } from "./google-tasks";
-import { normalizeCustomers, normalizeLeads, type AppState, type Reminder, type ReminderMeta } from "./types";
+import { googleConfigured } from "./google";
+import { normalizeCustomers, normalizeLeads, type AppState, type GoogleLink, type Reminder, type ReminderMeta } from "./types";
 
 export const BLOB_PATHNAME = "asuka-command-center/state.json";
 
@@ -91,16 +91,22 @@ export function emptyState(): AppState {
   };
 }
 
-/** First-boot seed. With Google Tasks as the reminders backend there is nothing to seed — the list is Brandon's. */
+/** First-boot seed. With Google configured, reminders belong to Brandon's Google list — nothing to seed. */
 export function seededState(): AppState {
   const base = emptyState();
-  return googleTasksEnabled() ? base : { ...base, reminders: SEED_REMINDERS };
+  return googleConfigured() ? base : { ...base, reminders: SEED_REMINDERS };
 }
 
 function isReminderMeta(v: unknown): v is ReminderMeta {
   if (!v || typeof v !== "object") return false;
   const m = v as Partial<ReminderMeta>;
   return typeof m.priority === "string" && typeof m.source === "string" && typeof m.createdAt === "string";
+}
+
+function isGoogleLink(v: unknown): v is GoogleLink {
+  if (!v || typeof v !== "object") return false;
+  const g = v as Partial<GoogleLink>;
+  return typeof g.refreshTokenEnc === "string" && g.refreshTokenEnc.length > 0 && typeof g.email === "string" && Array.isArray(g.scopes) && typeof g.connectedAt === "string";
 }
 
 function normalize(raw: unknown): AppState {
@@ -116,6 +122,7 @@ function normalize(raw: unknown): AppState {
     leads: normalizeLeads(parsed.leads),
     customers: normalizeCustomers(parsed.customers),
     ...(meta && Object.keys(meta).length ? { reminderMeta: meta } : {}),
+    ...(isGoogleLink(parsed.google) ? { google: parsed.google } : {}),
   };
 }
 
@@ -156,7 +163,7 @@ export async function readState(): Promise<AppState> {
     }
     const data = normalize(await res.json());
     if (
-      !googleTasksEnabled() &&
+      !googleConfigured() &&
       data.reminders.length === 0 &&
       data.leads.length === 0 &&
       data.notes.length <= 1

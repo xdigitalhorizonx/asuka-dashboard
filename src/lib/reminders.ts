@@ -1,16 +1,16 @@
 /**
- * Reminders provider. When Google Tasks is configured, Brandon's task list is the
- * source of truth for title / notes / due date / done, and the vault keeps a small
- * sidecar (`reminderMeta`) for the fields Google can't hold: priority, time, source
- * and the id Asuka knows the reminder by. Without Google, reminders live in the
- * vault exactly as before.
+ * Reminders provider. When Google is connected, Brandon's Google Tasks list is
+ * the source of truth for title / notes / due date / done, and the vault keeps a
+ * small sidecar (`reminderMeta`) for the fields Google can't hold: priority,
+ * time, source and the id Asuka knows the reminder by. Without Google, reminders
+ * live in the vault exactly as before.
  *
  * Every mutation returns the vault state to persist; callers `writeState()` it.
  */
+import { googleAuthFor, googleConnected, type GoogleAuth } from "./google";
 import {
   deleteTask,
   getTaskList,
-  googleTasksEnabled,
   insertTask,
   listTasks,
   patchTask,
@@ -25,14 +25,14 @@ export interface RemindersView {
   source: RemindersBackend;
   /** Title of the Google list (falls back to its id). */
   list?: string;
-  /** Google was configured but unreachable; the rest of the board still works. */
+  /** Google was connected but unreachable; the rest of the board still works. */
   error?: string;
   /** Reminders still sitting in the vault from before Google was connected — moved only on request. */
   pendingVault?: number;
 }
 
-export function remindersBackend(): RemindersBackend {
-  return googleTasksEnabled() ? "google" : "vault";
+export function remindersBackend(state: Pick<AppState, "google">): RemindersBackend {
+  return googleConnected(state) ? "google" : "vault";
 }
 
 /** Error text for the UI; Node's bare "fetch failed" gets its cause appended (e.g. ECONNREFUSED). */
@@ -40,6 +40,12 @@ export function errorMessage(err: unknown): string {
   if (!(err instanceof Error)) return String(err);
   const cause = err.cause instanceof Error ? err.cause.message : "";
   return cause && !err.message.includes(cause) ? `${err.message}: ${cause}` : err.message;
+}
+
+async function requireAuth(state: AppState): Promise<GoogleAuth> {
+  const auth = await googleAuthFor(state);
+  if (!auth) throw new Error("Google is not connected");
+  return auth;
 }
 
 const dueOf = (t: GoogleTask): string => (t.due ? t.due.slice(0, 10) : "");
@@ -81,6 +87,7 @@ function googleIdFor(meta: Record<string, ReminderMeta>, id: string): string | n
 }
 
 async function upsertGoogle(
+  auth: GoogleAuth,
   state: AppState,
   r: Reminder,
   known?: GoogleTask[]
@@ -92,8 +99,8 @@ async function upsertGoogle(
   const base: GoogleTaskPatch = { title: r.title, notes: r.notes || "", status: r.done ? "completed" : "needsAction" };
   const due = toGoogleDue(r.dueAt);
   const task = gid
-    ? await patchTask(gid, { ...base, due, ...(r.done ? {} : { completed: null }) })
-    : await insertTask({ ...base, ...(due ? { due } : {}) });
+    ? await patchTask(auth, gid, { ...base, due, ...(r.done ? {} : { completed: null }) })
+    : await insertTask(auth, { ...base, ...(due ? { due } : {}) });
 
   const prev = meta[task.id];
   const externalId = r.id !== task.id ? r.id : prev?.externalId;
@@ -114,9 +121,10 @@ async function upsertGoogle(
  * so a retry after a partial failure patches instead of duplicating.
  */
 export async function migrateVaultReminders(state: AppState): Promise<AppState> {
-  if (!googleTasksEnabled()) return state;
+  if (!googleConnected(state)) return state;
+  const auth = await requireAuth(state);
   let next = state;
-  for (const r of state.reminders) next = (await upsertGoogle(next, r)).state;
+  for (const r of state.reminders) next = (await upsertGoogle(auth, next, r)).state;
   return { ...next, reminders: [] };
 }
 
@@ -127,11 +135,12 @@ export function discardVaultReminders(state: AppState): AppState {
 
 /** Read-only: what the reminders backend currently holds. Never mutates anything. */
 export async function listReminders(state: AppState): Promise<RemindersView> {
-  if (!googleTasksEnabled()) return { reminders: state.reminders, source: "vault" };
+  if (!googleConnected(state)) return { reminders: state.reminders, source: "vault" };
   const pending = state.reminders.length ? { pendingVault: state.reminders.length } : {};
   try {
+    const auth = await requireAuth(state);
     const meta = state.reminderMeta ?? {};
-    const [tasks, list] = await Promise.all([listTasks(), getTaskList().catch(() => null)]);
+    const [tasks, list] = await Promise.all([listTasks(auth), getTaskList(auth).catch(() => null)]);
     const reminders = sortReminders(tasks.map((t) => fromTask(t, meta[t.id])));
     return { reminders, source: "google", list: list?.title ?? taskListId(), ...pending };
   } catch (err) {
@@ -140,29 +149,31 @@ export async function listReminders(state: AppState): Promise<RemindersView> {
 }
 
 export async function upsertReminder(state: AppState, r: Reminder): Promise<{ state: AppState; reminder: Reminder }> {
-  if (!googleTasksEnabled()) {
+  if (!googleConnected(state)) {
     const others = state.reminders.filter((x) => x.id !== r.id);
     return { state: { ...state, reminders: [r, ...others] }, reminder: r };
   }
-  return upsertGoogle(state, r);
+  return upsertGoogle(await requireAuth(state), state, r);
 }
 
 export async function setReminderDone(state: AppState, id: string, done: boolean): Promise<AppState> {
-  if (!googleTasksEnabled()) {
+  if (!googleConnected(state)) {
     return { ...state, reminders: state.reminders.map((r) => (r.id === id ? { ...r, done } : r)) };
   }
+  const auth = await requireAuth(state);
   const gid = googleIdFor(state.reminderMeta ?? {}, id) ?? id;
-  await patchTask(gid, done ? { status: "completed" } : { status: "needsAction", completed: null });
+  await patchTask(auth, gid, done ? { status: "completed" } : { status: "needsAction", completed: null });
   return state;
 }
 
 export async function removeReminder(state: AppState, id: string): Promise<AppState> {
-  if (!googleTasksEnabled()) {
+  if (!googleConnected(state)) {
     return { ...state, reminders: state.reminders.filter((r) => r.id !== id) };
   }
+  const auth = await requireAuth(state);
   const meta = { ...(state.reminderMeta ?? {}) };
   const gid = googleIdFor(meta, id) ?? id;
-  await deleteTask(gid);
+  await deleteTask(auth, gid);
   delete meta[gid];
   return { ...state, reminderMeta: meta };
 }
@@ -173,23 +184,24 @@ export async function removeReminder(state: AppState, id: string): Promise<AppSt
  * earlier and no longer sends — tasks Brandon made himself are never touched.
  */
 export async function replaceReminders(state: AppState, incoming: Reminder[]): Promise<AppState> {
-  if (!googleTasksEnabled()) return { ...state, reminders: incoming };
-  const known = await listTasks();
+  if (!googleConnected(state)) return { ...state, reminders: incoming };
+  const auth = await requireAuth(state);
+  const known = await listTasks(auth);
   let next = state;
-  for (const r of incoming) next = (await upsertGoogle(next, r, known)).state;
+  for (const r of incoming) next = (await upsertGoogle(auth, next, r, known)).state;
   const keep = new Set(incoming.map((r) => r.id));
   const meta = { ...(next.reminderMeta ?? {}) };
   for (const [gid, m] of Object.entries(meta)) {
     if (m.source === "asuka" && m.externalId && !keep.has(m.externalId) && !keep.has(gid)) {
-      await deleteTask(gid);
+      await deleteTask(auth, gid);
       delete meta[gid];
     }
   }
   return { ...next, reminderMeta: meta };
 }
 
-/** What the browser and the Asuka bot receive: vault content plus the live reminders. */
-export function clientPayload(state: AppState, view: RemindersView) {
+/** What the browser and the Asuka bot receive: vault content plus the live reminders. Never the sidecar or the token. */
+export function clientPayload(state: AppState, view: RemindersView, extra: Record<string, unknown> = {}) {
   return {
     reminders: view.reminders,
     notes: state.notes,
@@ -200,5 +212,6 @@ export function clientPayload(state: AppState, view: RemindersView) {
     ...(view.list ? { remindersList: view.list } : {}),
     ...(view.error ? { remindersError: view.error } : {}),
     ...(view.pendingVault ? { remindersPending: view.pendingVault } : {}),
+    ...extra,
   };
 }

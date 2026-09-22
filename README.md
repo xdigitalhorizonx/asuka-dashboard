@@ -8,7 +8,8 @@ Pastel-on-dark ops dashboard for conversations with the Asuka Langley Grokbot ag
   into `public/` — edit the pixel grid in that script and re-run to change the art.
 
 - Reminders = **Google Tasks** (brandon@digitalhorizon.dev) — add / complete / remove here or in the
-  Google Tasks app, and Asuka's SMS reminders land in the same list. See *Reminders = Google Tasks*.
+  Google Tasks app, and Asuka's SMS reminders land in the same list. **Google Calendar** events show on
+  the Calendar tab and the Overview "Today" panel. One click to connect — see *Google: Tasks + Calendar*.
 - Calendar of due dates **and lead appointments**
 - Notes
 - Attachments
@@ -41,13 +42,23 @@ npm run dev     # without BLOB_READ_WRITE_TOKEN it persists to ./.asuka-local-st
 - `STRIPE_SECRET_KEY` — Digital Horizon Stripe key (a restricted key with Customers + Charges read is enough) for **⟳ SYNC STRIPE**
 - `STRIPE_WEBHOOK_SECRET` — signing secret of the Stripe webhook endpoint pointed at `/api/stripe/webhook`
 - `CRON_SECRET` — lets Vercel Cron call `/api/stripe/sync` through the gate
-- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_TASKS_REFRESH_TOKEN` — turn on the Google Tasks
-  reminders backend (all three required; see below)
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` — the "Web application" OAuth client that powers the
+  **Connect Google** button (see below). Without them the button explains what's missing.
+- `GOOGLE_TOKEN_KEY` — optional; encrypts the Google refresh token at rest in the vault (falls back to
+  `ASUKA_SESSION_SECRET`, then the dashboard password). Changing it means connecting again.
+- `GOOGLE_ACCOUNT` — optional; the only Google account allowed to connect. Default `brandon@digitalhorizon.dev`.
+- `GOOGLE_REDIRECT_URI` — optional; only needed when the board is served from a host other than the one
+  in the browser bar (default `https://<host>/api/google/callback`).
+- `GOOGLE_TASKS_REFRESH_TOKEN` — optional legacy path: a token minted with `scripts/google-tasks-auth.mjs`.
+  When set it wins over the in-app connection and can only be disconnected by removing the var.
 - `GOOGLE_TASKS_LIST` — optional Google task-list id; default `@default` (the account's "My Tasks")
+- `GOOGLE_CALENDAR_ID` — optional calendar to show; default `primary`
 
-## Reminders = Google Tasks
+## Google: Tasks + Calendar
 
-When the three `GOOGLE_*` vars are set, the Reminders tab **is** Brandon's Google Tasks list:
+Once Brandon has pressed **Connect Google** (Reminders tab → *Google account* card) as
+brandon@digitalhorizon.dev, the Reminders tab **is** his Google Tasks list and his primary Google
+Calendar appears on the board:
 
 - Title, notes, due date and done/undone live in Google. Anything added in the Google Tasks app (phone,
   Gmail sidebar, Calendar) shows on the board within a poll (~20 s), and vice versa.
@@ -63,23 +74,39 @@ When the three `GOOGLE_*` vars are set, the Reminders tab **is** Brandon's Googl
   completes it, `remove_reminder` deletes it. `replace_reminders` (her full sync) upserts what she sends
   and removes only tasks *she* created earlier and no longer sends — tasks Brandon made himself are never
   touched. Asuka keeps using her own ids (`r6`, …); the board maps them to Google task ids.
-- Without the vars the board behaves exactly as before (reminders in the vault JSON).
+- **Google Calendar** (read-only): events from the primary calendar show as sky-blue bars on the
+  Calendar tab (click a day for times, location and an *Open in Google* link) and in the Overview
+  "Today" panel. Refreshed on focus and every two minutes while the tab is visible.
+- Disconnected, the board behaves exactly as before (reminders in the vault JSON, no calendar).
 
-### One-time setup (≈5 minutes)
+### How the connection works
 
-1. Google Cloud console → a project of your choice → **APIs & Services → Library → Google Tasks API → Enable**.
-2. **OAuth consent screen**: user type *Internal* is simplest for the digitalhorizon.dev Workspace
-   (no verification). Add the scope `https://www.googleapis.com/auth/tasks`.
-3. **Credentials → Create credentials → OAuth client ID → Desktop app**. Copy the client id + secret.
-4. On any machine with Node 18+:
-   ```bash
-   GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… node scripts/google-tasks-auth.mjs
-   ```
-   (PowerShell: `$env:GOOGLE_CLIENT_ID="…"; $env:GOOGLE_CLIENT_SECRET="…"; node scripts/google-tasks-auth.mjs`)
-   A browser opens — sign in as **brandon@digitalhorizon.dev** and approve. The script prints the three
-   env vars and the account's task lists (pick one for `GOOGLE_TASKS_LIST` if you don't want "My Tasks").
-5. Paste the vars into Vercel → Settings → Environment Variables and redeploy. The badge on the
-   Reminders tab turns green.
+`GET /api/google/connect` (session-gated) sends the browser to Google's consent screen for the Tasks and
+Calendar-events scopes; Google returns to `/api/google/callback`, which checks the anti-forgery state
+cookie, exchanges the code, **refuses any account other than `GOOGLE_ACCOUNT`** (and revokes that grant
+on the spot), requires the Tasks scope, and stores the refresh token AES-256-GCM-encrypted in the vault
+(`state.google`). The token never reaches the browser or Asuka. **Disconnect** on the same card revokes it
+at Google and forgets it. Status codes land back on the Reminders tab as a banner
+(`connected`, `wrong-account:<email>`, `missing-tasks-scope`, `denied:…`, `state-mismatch`).
+
+### One-time setup in Google Cloud (≈5 minutes, once)
+
+1. Google Cloud console → a project of your choice → **APIs & Services → Library**: enable
+   **Google Tasks API** and **Google Calendar API**.
+2. **OAuth consent screen** (Google Auth Platform → Audience): user type *Internal* is simplest for the
+   digitalhorizon.dev Workspace (no verification). Scopes: `…/auth/tasks`, `…/auth/calendar.events`,
+   `openid`, `email`.
+3. **Credentials → Create credentials → OAuth client ID → Web application**. Authorised redirect URI:
+   `https://asuka-dashboard-jet.vercel.app/api/google/callback` (plus any custom domain the board is
+   served from, same path). Copy the client id + secret.
+4. Vercel → Settings → Environment Variables (Production): `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+   and a long random `GOOGLE_TOKEN_KEY`. Redeploy.
+5. Open the board → Reminders → **Connect Google** → sign in as **brandon@digitalhorizon.dev** → Allow.
+   The badge turns green and the Calendar tab picks up events.
+
+Alternative without the button (CI, or a token you want to manage yourself): create a *Desktop app*
+client instead and run `node scripts/google-tasks-auth.mjs` locally; it prints
+`GOOGLE_TASKS_REFRESH_TOKEN` to set alongside the client id/secret.
 
 ## Local dev
 
@@ -152,4 +179,4 @@ Stages: `new_lead | appointment_set | proposal_sent | closed_won | lost`.
 
 Customer shape: `{ id, company, contact, address, phone, email, website, notes, transactions: [{id, amount, method: "check"|"cash"|"card", date: "YYYY-MM-DD", memo, createdAt, stripeId?}], stripeCustomerId?, createdAt, updatedAt }`.
 
-Browser UI uses same-origin `GET/POST /api/state` (session cookie, or `Authorization: Bearer $ASUKA_SYNC_TOKEN` for scripts) and polls about every 20s while the tab is visible. Reminder changes from the UI go through `POST /api/reminders` with `{action: "upsert", reminder}`, `{action: "set_done", id, done}` or `{action: "remove", id}`; the posted `state.reminders` on `/api/state` is ignored while Google Tasks is connected.
+Browser UI uses same-origin `GET/POST /api/state` (session cookie, or `Authorization: Bearer $ASUKA_SYNC_TOKEN` for scripts) and polls about every 20s while the tab is visible. Reminder changes from the UI go through `POST /api/reminders` with `{action: "upsert", reminder}`, `{action: "set_done", id, done}` or `{action: "remove", id}`; the posted `state.reminders` on `/api/state` is ignored while Google Tasks is connected. `GET /api/state` also carries `google` (`configured`, `connected`, `account`, `email`, `tasks`, `calendar`). Calendar events come from `GET /api/calendar?from=YYYY-MM-DD&to=YYYY-MM-DD` (≤120 days).

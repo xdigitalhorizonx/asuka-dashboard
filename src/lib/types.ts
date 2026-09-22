@@ -29,6 +29,27 @@ export interface ReminderMeta {
   createdAt: string;
 }
 
+/** The Google account link made by the in-app Connect flow. Server-owned; the browser never sees it. */
+export interface GoogleLink {
+  /** AES-GCM ciphertext of the refresh token (see lib/google.ts). */
+  refreshTokenEnc: string;
+  email: string;
+  scopes: string[];
+  connectedAt: string;
+}
+
+/** A Google Calendar event as shown on the board. */
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  /** RFC 3339 for timed events, "YYYY-MM-DD" for all-day ones. */
+  start: string;
+  end: string;
+  allDay: boolean;
+  location?: string;
+  link?: string;
+}
+
 export const REMINDER_PRIORITIES: ReminderPriority[] = ["low", "medium", "high"];
 
 export function isReminderPriority(v: unknown): v is ReminderPriority {
@@ -143,6 +164,8 @@ export interface AppState {
   customers: Customer[];
   /** Only present in the server vault while reminders are backed by Google Tasks. */
   reminderMeta?: Record<string, ReminderMeta>;
+  /** Only present in the server vault after the in-app Google connect. */
+  google?: GoogleLink;
 }
 
 export const CRM_STAGES: { id: CrmStage; label: string; hint: string }[] = [
