@@ -193,6 +193,9 @@ export async function writeState(state: AppState): Promise<AppState> {
   await put(BLOB_PATHNAME, JSON.stringify(normalized), {
     access: "public",
     addRandomSuffix: false,
+    // @vercel/blob 1.x+ refuses to replace an existing pathname unless asked to;
+    // the vault is one document rewritten in place.
+    allowOverwrite: true,
     contentType: "application/json",
     token,
   });

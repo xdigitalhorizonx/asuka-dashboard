@@ -8,3 +8,4 @@ build
 next-env.d.ts
 .asuka-local-state.json
 .claude/
+.asuka-local-blobs/

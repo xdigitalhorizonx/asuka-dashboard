@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { CalendarEvent, Lead, Reminder, ReminderPriority } from "@/lib/types";
 import { uid, useAsukaStore, useCalendarEvents } from "@/lib/store";
 import { apptTime, hasAppointment, localToday, tint } from "@/lib/crm";
 import { haptic } from "@/lib/haptics";
+import { dismissUpload, removeFile, uploadFiles, useFiles } from "@/lib/files-client";
 import { Icon } from "./icons";
 import { Crm } from "./Crm";
 import { Customers, money } from "./Customers";
@@ -202,7 +203,7 @@ export default function Dashboard({ lockable = false }: { lockable?: boolean }) 
               ) : tab === "notes" ? (
                 <Notes store={store} />
               ) : tab === "files" ? (
-                <Attachments store={store} />
+                <Attachments />
               ) : tab === "customers" ? (
                 <Customers store={store} />
               ) : (
@@ -236,6 +237,7 @@ function Overview({ store, dueToday, openReminders, pipeline, setTab }: { store:
     .sort((a, b) => (a.appointmentAt || "").localeCompare(b.appointmentAt || ""));
   const apptsSet = store.leads.filter((l) => l.stage === "appointment_set").length;
   const cal = useCalendarEvents(today, today, store.google.calendar);
+  const files = useFiles();
   const eventsToday = useMemo(() => eventsByDay(cal.events)[today] ?? [], [cal.events, today]);
   const ym = today.slice(0, 7);
   const monthRevenue = store.customers.reduce((s, c) => s + c.transactions.filter((t) => t.date.startsWith(ym)).reduce((a, t) => a + t.amount, 0), 0);
@@ -265,7 +267,7 @@ function Overview({ store, dueToday, openReminders, pipeline, setTab }: { store:
     { l: "APPTS SET", v: apptsSet, d: apptsToday.length ? `${apptsToday.length} today` : "on the calendar", t: "crm" as Tab, hue: "var(--color-violet)" },
     { l: "CUSTOMERS", v: store.customers.length, d: monthRevenue ? `${money(monthRevenue)} this month` : "paying clients", t: "customers" as Tab, hue: "var(--color-mint)" },
     { l: "NOTES", v: store.notes.length, d: "pinned + free", t: "notes" as Tab, hue: "var(--color-lemon)" },
-    { l: "FILES", v: store.attachments.length, d: "local vault", t: "files" as Tab, hue: "var(--color-lilac)" },
+    { l: "FILES", v: files.files.length, d: files.loaded ? "file storage" : "loading…", t: "files" as Tab, hue: "var(--color-lilac)" },
   ];
 
   return (
@@ -682,41 +684,187 @@ function Notes({ store }: { store: Store }) {
   );
 }
 
-function Attachments({ store }: { store: Store }) {
+function Attachments() {
+  const files = useFiles();
+  const [drag, setDrag] = useState(false);
+  const [rowError, setRowError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // A file dropped anywhere but the drop zone used to make the browser open it and leave
+  // the board. Swallow stray file drops while this tab is open.
+  useEffect(() => {
+    const stray = (e: DragEvent) => {
+      if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
+    };
+    window.addEventListener("dragover", stray);
+    window.addEventListener("drop", stray);
+    return () => {
+      window.removeEventListener("dragover", stray);
+      window.removeEventListener("drop", stray);
+    };
+  }, []);
+
+  // Paste a screenshot straight in.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const list = Array.from(e.clipboardData?.files ?? []);
+      if (!list.length) return;
+      e.preventDefault();
+      haptic("tap");
+      void uploadFiles(list);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
+
+  const start = (list: File[]) => {
+    if (!list.length) return;
+    setRowError(null);
+    haptic("tap");
+    void uploadFiles(list);
+  };
+
+  const cols = { ["--cols" as string]: "40px minmax(0, 1fr) 64px 84px 110px 104px", ["--cols-sm" as string]: "40px minmax(0, 1fr) 104px" };
+  const uploading = files.uploads.some((u) => u.status === "uploading");
+
   return (
-    <div>
-      <label className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, marginBottom: 16, cursor: "pointer", borderStyle: "dashed" }}>
-        <p style={{ fontWeight: 500 }}>Drop files or click to upload</p>
-        <p style={{ marginTop: 4, fontSize: 12, color: "var(--color-muted)" }}>STORED IN THIS BROWSER · SYNCED WITH VAULT JSON</p>
-        <input type="file" multiple className="hidden" onChange={(e) => {
-          const list = e.target.files; if (!list) return;
-          Array.from(list).forEach((file) => {
-            const reader = new FileReader();
-            reader.onload = () => store.setAttachments((as) => [{ id: uid("a"), name: file.name, mime: file.type || "application/octet-stream", size: file.size, dataUrl: String(reader.result), createdAt: new Date().toISOString() }, ...as]);
-            reader.readAsDataURL(file);
-          });
-        }} />
-      </label>
+    <div style={{ display: "grid", gap: 16 }}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label="Upload files: drop them here, press Enter to choose, or paste a screenshot"
+        className="card"
+        onClick={() => inputRef.current?.click()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            inputRef.current?.click();
+          }
+        }}
+        onDragEnter={(e) => {
+          e.preventDefault();
+          setDrag(true);
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+          if (!drag) setDrag(true);
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDrag(false);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDrag(false);
+          start(Array.from(e.dataTransfer.files));
+        }}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 6,
+          padding: 30,
+          cursor: "pointer",
+          borderStyle: "dashed",
+          borderWidth: 2,
+          textAlign: "center",
+          borderColor: drag ? "var(--color-lilac)" : "var(--color-border)",
+          background: drag ? tint("var(--color-lilac)", 12) : undefined,
+          transition: "background-color 160ms, border-color 160ms",
+        }}
+      >
+        <Icon name="files" size={30} style={{ ["--color-primary" as string]: "var(--color-lilac)" }} />
+        <p style={{ fontWeight: 600, margin: "4px 0 0" }}>{drag ? "Drop to upload" : "Drop files here, click to choose, or paste a screenshot"}</p>
+        <p className="label" style={{ margin: 0 }}>
+          {files.mode === "none" ? "File storage isn't configured on this deployment" : `Saved to file storage · up to ${Math.round((files.maxBytes || 104857600) / 1048576)} MB each`}
+        </p>
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => {
+            start(Array.from(e.target.files ?? []));
+            e.target.value = "";
+          }}
+        />
+      </div>
+
+      {files.uploads.length > 0 && (
+        <div className="card" style={{ padding: "6px 14px" }} aria-live="polite">
+          {files.uploads.map((u) => (
+            <div key={u.key} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 10, alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--color-border)" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 14 }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.name}</span>
+                  <span style={{ flexShrink: 0, color: u.status === "error" ? "var(--color-danger)" : u.status === "done" ? "var(--color-green)" : "var(--color-muted)" }}>
+                    {u.status === "error" ? "Failed" : u.status === "done" ? "Saved ✓" : `${u.progress}%`}
+                  </span>
+                </div>
+                {u.status === "error" ? (
+                  <div style={{ fontSize: 13, color: "var(--color-danger)", marginTop: 2 }}>{u.error}</div>
+                ) : (
+                  <div style={{ height: 4, borderRadius: 4, background: "var(--color-border)", marginTop: 6, overflow: "hidden" }} role="progressbar" aria-valuenow={u.progress} aria-valuemin={0} aria-valuemax={100} aria-label={`Uploading ${u.name}`}>
+                    <div style={{ height: "100%", width: `${u.progress}%`, background: u.status === "done" ? "var(--color-green)" : "var(--color-lilac)", transition: "width 200ms" }} />
+                  </div>
+                )}
+              </div>
+              {u.status === "error" && (
+                <button type="button" className="btn btn-ghost" onClick={() => dismissUpload(u.key)} aria-label={`Dismiss ${u.name}`} style={{ minHeight: 28, padding: "4px 8px" }}>×</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(files.error || rowError) && (
+        <p role="alert" style={{ margin: 0, fontSize: 13, color: "var(--color-danger)" }}>
+          {rowError || `Couldn't load files · ${files.error}`}
+        </p>
+      )}
+
       <div className="card" style={{ overflow: "hidden" }}>
-        <div className="rows label" style={{ ["--cols" as string]: "40px minmax(0, 1fr) 70px 80px 120px 80px", ["--cols-sm" as string]: "40px minmax(0, 1fr) 60px 72px", padding: "10px 14px", borderBottom: "1px solid var(--color-border)" }}>
+        <div className="rows label" style={{ ...cols, padding: "10px 14px", borderBottom: "1px solid var(--color-border)" }}>
           <span />
           <span>Name</span>
-          <span>Type</span>
+          <span className="hide-sm">Type</span>
           <span className="hide-sm">Size</span>
-          <span className="hide-sm">Date</span>
+          <span className="hide-sm">Added</span>
           <span />
         </div>
-        {store.attachments.length === 0 && <p style={{ padding: 16, color: "var(--color-muted)" }}>No files yet.</p>}
-        {store.attachments.map((a) => {
-          const k = fileKind(a.name, a.mime);
+        {!files.loaded && <p style={{ padding: 16, margin: 0, color: "var(--color-muted)" }}>Loading files…</p>}
+        {files.loaded && files.files.length === 0 && !uploading && <p style={{ padding: 16, margin: 0, color: "var(--color-muted)" }}>No files yet.</p>}
+        {files.files.map((f) => {
+          const k = fileKind(f.name, "");
+          const href = `/api/files/${encodeURIComponent(f.id)}`;
           return (
-            <div key={a.id} className="rows" style={{ ["--cols" as string]: "40px minmax(0, 1fr) 70px 80px 120px 80px", ["--cols-sm" as string]: "40px minmax(0, 1fr) 60px 72px", padding: "10px 14px", borderTop: "1px solid var(--color-border)", fontSize: 15 }}>
+            <div key={f.id} className="rows" style={{ ...cols, padding: "10px 14px", borderTop: "1px solid var(--color-border)", fontSize: 15 }}>
               <div style={{ width: 28, height: 28, borderRadius: 8, background: tint(k.color, 14), display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 600, color: k.color }}>{k.label.slice(0, 1)}</div>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</span>
-              <span style={{ fontSize: 13, color: k.color }}>{k.label}</span>
-              <span className="hide-sm" style={{ fontSize: 13, color: "var(--color-muted)" }}>{fmtBytes(a.size)}</span>
-              <span className="hide-sm" style={{ fontSize: 13, color: "var(--color-muted)" }}>{a.createdAt.slice(0, 10)}</span>
-              <button type="button" onClick={() => store.setAttachments((as) => as.filter((x) => x.id !== a.id))} className="btn btn-danger" style={{ minHeight: 32, padding: "6px 10px" }}>Del</button>
+              <a href={href} target="_blank" rel="noopener" title={`Open ${f.name}`} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "inherit", textDecoration: "none" }}>{f.name}</a>
+              <span className="hide-sm" style={{ fontSize: 13, color: k.color }}>{k.label}</span>
+              <span className="hide-sm" style={{ fontSize: 13, color: "var(--color-muted)" }}>{fmtBytes(f.size)}</span>
+              <span className="hide-sm" style={{ fontSize: 13, color: "var(--color-muted)" }}>{new Date(f.uploadedAt).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}</span>
+              <span style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                <a href={`${href}?download=1`} className="btn" aria-label={`Download ${f.name}`} title="Download" style={{ minHeight: 32, padding: "6px 10px", textDecoration: "none" }}>↓</a>
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  disabled={busyId === f.id}
+                  style={{ minHeight: 32, padding: "6px 10px" }}
+                  onClick={async () => {
+                    if (!window.confirm(`Delete ${f.name}? This can't be undone.`)) return;
+                    setBusyId(f.id);
+                    const err = await removeFile(f.id);
+                    setBusyId(null);
+                    if (err) setRowError(`Couldn't delete ${f.name} · ${err}`);
+                    else haptic("tap");
+                  }}
+                >
+                  {busyId === f.id ? "…" : "Del"}
+                </button>
+              </span>
             </div>
           );
         })}

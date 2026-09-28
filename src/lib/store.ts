@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { rescueLocalAttachments, uploadDataUrls, type LegacyAttachment } from "./files-client";
 import {
   normalizeCustomers,
   normalizeLeads,
   type AppState,
-  type Attachment,
   type CalendarEvent,
   type Customer,
   type Lead,
@@ -71,11 +71,12 @@ type ServerPayload = Partial<AppState> & {
 
 type Remote = { state: AppState; info: RemindersInfo; google?: GoogleStatus };
 
+/** Attachments are files in storage now (see files-client.ts); the board state never carries them. */
 function normalize(parsed: Partial<AppState> | null | undefined): AppState {
   return {
     reminders: parsed?.reminders ?? [],
     notes: parsed?.notes ?? [],
-    attachments: parsed?.attachments ?? [],
+    attachments: [],
     leads: normalizeLeads(parsed?.leads),
     customers: normalizeCustomers(parsed?.customers),
   };
@@ -98,6 +99,32 @@ function loadLocal(): AppState {
     return normalize(JSON.parse(raw) as AppState);
   } catch {
     return seed;
+  }
+}
+
+/**
+ * Attachments the old board kept only in this browser (base64 in localStorage) —
+ * e.g. ones whose save to the server failed. Read before the first server copy
+ * overwrites localStorage, so they can be uploaded as real files.
+ */
+function localLegacyAttachments(): LegacyAttachment[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(localStorage.getItem(KEY) || "{}") as Partial<AppState>;
+    return Array.isArray(parsed.attachments)
+      ? parsed.attachments.filter((a) => !!a && typeof a.dataUrl === "string" && a.dataUrl.startsWith("data:"))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/** localStorage is a convenience cache: a full or blocked store must never break the board. */
+function saveLocal(state: AppState) {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(state));
+  } catch {
+    // quota exceeded / storage disabled — the server copy is authoritative
   }
 }
 
@@ -160,6 +187,7 @@ export function useAsukaStore() {
     let cancelled = false;
     (async () => {
       const local = loadLocal();
+      const stranded = localLegacyAttachments();
       if (!cancelled) setState(local);
       const remote = await fetchServer();
       if (!cancelled && remote) {
@@ -167,11 +195,14 @@ export function useAsukaStore() {
         setRemindersInfo(remote.info);
         if (remote.google) setGoogle(remote.google);
         setSyncedAt(new Date().toISOString());
-        localStorage.setItem(KEY, JSON.stringify(remote.state));
+        saveLocal(remote.state);
       }
       if (!cancelled) {
         skipNextPersist.current = true;
         setHydrated(true);
+        // Only once the server copy exists (it migrates vault attachments on that read),
+        // so files already stored are recognised and not uploaded twice.
+        if (remote && stranded.length) void rescueLocalAttachments(stranded);
       }
     })();
     return () => {
@@ -181,7 +212,7 @@ export function useAsukaStore() {
 
   useEffect(() => {
     if (!hydrated) return;
-    localStorage.setItem(KEY, JSON.stringify(state));
+    saveLocal(state);
     if (skipNextPersist.current) {
       skipNextPersist.current = false;
       return;
@@ -202,11 +233,7 @@ export function useAsukaStore() {
     setRemindersInfo(remote.info);
     if (remote.google) setGoogle(remote.google);
     setSyncedAt(new Date().toISOString());
-    try {
-      localStorage.setItem(KEY, JSON.stringify(remote.state));
-    } catch {
-      // storage full / unavailable — server copy is authoritative anyway
-    }
+    saveLocal(remote.state);
   }, []);
 
   useEffect(() => {
@@ -318,11 +345,6 @@ export function useAsukaStore() {
     (fn: (prev: Note[]) => Note[]) => setState((s) => ({ ...s, notes: fn(s.notes) })),
     []
   );
-  const setAttachments = useCallback(
-    (fn: (prev: Attachment[]) => Attachment[]) =>
-      setState((s) => ({ ...s, attachments: fn(s.attachments) })),
-    []
-  );
   const setLeads = useCallback(
     (fn: (prev: Lead[]) => Lead[]) => setState((s) => ({ ...s, leads: fn(s.leads) })),
     []
@@ -361,8 +383,13 @@ export function useAsukaStore() {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const parsed = normalize(JSON.parse(String(reader.result)) as AppState);
-        setState(parsed);
+        const raw = JSON.parse(String(reader.result)) as Partial<AppState>;
+        setState(normalize(raw));
+        // Backups made before file storage carry attachments as data URLs — re-upload them.
+        const legacy = Array.isArray(raw.attachments)
+          ? raw.attachments.filter((a) => !!a && typeof a.dataUrl === "string" && a.dataUrl.startsWith("data:"))
+          : [];
+        if (legacy.length) void uploadDataUrls(legacy);
       } catch {
         alert("Could not parse that JSON backup.");
       }
@@ -388,7 +415,6 @@ export function useAsukaStore() {
     migrateVaultReminders,
     discardVaultReminders,
     setNotes,
-    setAttachments,
     setLeads,
     setCustomers,
     adoptServerState,

@@ -205,7 +205,8 @@ export function clientPayload(state: AppState, view: RemindersView, extra: Recor
   return {
     reminders: view.reminders,
     notes: state.notes,
-    attachments: state.attachments,
+    // Attachments live in file storage now (/api/files), never in this payload.
+    attachments: [],
     leads: state.leads,
     customers: state.customers,
     remindersSource: view.source,

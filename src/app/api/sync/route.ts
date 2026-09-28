@@ -57,10 +57,12 @@ export async function POST(req: Request) {
     switch (body.action) {
       case "set_state": {
         // Reminders are owned by the reminders backend; a whole-state push keeps the server's
-        // copy, the sidecar and the Google link — none of which Asuka ever sees.
+        // copy, the sidecar, the Google link and any legacy vault attachments (files live in
+        // /api/files) — none of which Asuka ever sees.
         const google = remindersBackend(state) === "google";
         state = await writeState({
           ...body.state,
+          attachments: state.attachments,
           ...(google ? { reminders: state.reminders } : {}),
           ...(state.reminderMeta ? { reminderMeta: state.reminderMeta } : {}),
           ...(state.google ? { google: state.google } : {}),
