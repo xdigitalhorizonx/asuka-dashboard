@@ -8,6 +8,8 @@ import {
   type StripeCharge,
   type StripeCustomer,
 } from "@/lib/stripe";
+import { addInvoiceTransaction } from "@/lib/invoice/customers";
+import { invoicePaymentForCharge } from "@/lib/invoice/payments";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,6 +19,9 @@ export const dynamic = "force-dynamic";
  * Auth is the Stripe signature (STRIPE_WEBHOOK_SECRET); proxy.ts leaves this path open.
  * Handled: charge.succeeded / charge.updated / charge.refunded, customer.created / customer.updated.
  * Everything else is acknowledged and ignored. Safe to replay (idempotent by charge id).
+ * A charge that paid a live invoice is also recorded on that invoice, and filed under the
+ * invoice's client on the Customers tab before the generic import sees it (which then
+ * finds it by charge id instead of creating a nameless customer).
  */
 
 const HANDLED = new Set(["charge.succeeded", "charge.updated", "charge.refunded", "customer.created", "customer.updated"]);
@@ -59,11 +64,23 @@ export async function POST(req: Request) {
     const ix = buildIndex(customers);
     const now = new Date().toISOString();
 
-    const action = event.type.startsWith("customer.")
-      ? upsertStripeCustomer(customers, ix, object as StripeCustomer, now)
-      : applyStripeCharge(customers, ix, object as StripeCharge, now);
+    let invoiceTx = false;
+    if (event.type.startsWith("charge.")) {
+      try {
+        const paid = await invoicePaymentForCharge(object as StripeCharge);
+        if (paid) invoiceTx = addInvoiceTransaction(customers, paid.invoice, paid.payment);
+      } catch (err) {
+        // The invoice page and its finalize step reconcile with Stripe on their own;
+        // never let an invoice lookup block the Customers import of this event.
+        console.error("webhook: invoice lookup failed", err);
+      }
+    }
 
-    const changed = action === "added" || action === "updated" || action === "removed";
+    const action = event.type.startsWith("customer.")
+      ? upsertStripeCustomer(customers, invoiceTx ? buildIndex(customers) : ix, object as StripeCustomer, now)
+      : applyStripeCharge(customers, invoiceTx ? buildIndex(customers) : ix, object as StripeCharge, now);
+
+    const changed = invoiceTx || action === "added" || action === "updated" || action === "removed";
     if (changed) await writeState({ ...state, customers });
 
     return NextResponse.json({ received: true, event: event.id, type: event.type, action, customers: customers.length });

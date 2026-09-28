@@ -534,6 +534,25 @@ main.content {
     display: none !important;
   }
 }
+/* phones only: the invoice row's own action bar, and inline text shown only there */
+.only-sm {
+  display: none;
+}
+@media (max-width: 639px) {
+  .show-sm {
+    display: flex !important;
+  }
+  .only-sm {
+    display: inline !important;
+  }
+  /* invoice draft line: service fields on their own row, then type · amount · remove */
+  .draft-line {
+    grid-template-columns: minmax(0, 1fr) 120px 36px !important;
+  }
+  .draft-line > :first-child {
+    grid-column: 1 / -1;
+  }
+}
 
 /* selectable list rows */
 .row-btn {

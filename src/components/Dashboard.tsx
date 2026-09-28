@@ -9,8 +9,9 @@ import { dismissUpload, removeFile, uploadFiles, useFiles } from "@/lib/files-cl
 import { Icon } from "./icons";
 import { Crm } from "./Crm";
 import { Customers, money } from "./Customers";
+import { Invoices } from "./Invoices";
 
-type Tab = "overview" | "reminders" | "calendar" | "notes" | "files" | "crm" | "customers";
+type Tab = "overview" | "reminders" | "calendar" | "notes" | "files" | "crm" | "invoices" | "customers";
 type Store = ReturnType<typeof useAsukaStore>;
 
 /** Every section owns a pastel hue: the dock glyph, its active state and the matching overview tile use it. */
@@ -21,6 +22,7 @@ const NAV: { id: Tab; label: string; hue: string }[] = [
   { id: "notes", label: "Notes", hue: "var(--color-lemon)" },
   { id: "files", label: "Attachments", hue: "var(--color-lilac)" },
   { id: "crm", label: "CRM", hue: "var(--color-lavender)" },
+  { id: "invoices", label: "Invoices", hue: "var(--color-teal)" },
   { id: "customers", label: "Customers", hue: "var(--color-mint)" },
 ];
 
@@ -182,7 +184,7 @@ export default function Dashboard({ lockable = false }: { lockable?: boolean }) 
             <p style={{ color: "var(--color-muted)", margin: 0 }}>Loading Central Dogma…</p>
           ) : (
             <>
-              {tab !== "customers" && (
+              {tab !== "customers" && tab !== "invoices" && (
                 <div className="page-head">
                   <h1 className="page-title">{title}</h1>
                 </div>
@@ -206,6 +208,8 @@ export default function Dashboard({ lockable = false }: { lockable?: boolean }) 
                 <Attachments />
               ) : tab === "customers" ? (
                 <Customers store={store} />
+              ) : tab === "invoices" ? (
+                <Invoices />
               ) : (
                 <Crm store={store} />
               )}

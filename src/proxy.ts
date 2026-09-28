@@ -3,10 +3,14 @@ import { SESSION_COOKIE, bearerMatchesCron, bearerMatchesSync, gateEnabled, veri
 
 /** Paths that stay reachable without a session: the login flow, the Asuka bot's
  *  bearer-protected sync API, the Stripe webhook (authenticated by its signature),
- *  and the home-screen assets — iOS fetches the manifest and apple-touch-icon
- *  without cookies, so they must not redirect to /login. */
+ *  the home-screen assets — iOS fetches the manifest and apple-touch-icon
+ *  without cookies, so they must not redirect to /login — and the customer-facing
+ *  live invoices (/i/<id> + /api/public/invoices/<id>/…), where the unguessable
+ *  invoice id in the URL is the credential. Everything else stays behind the login. */
 const OPEN = [
   "/login",
+  "/i",
+  "/api/public",
   "/api/login",
   "/api/logout",
   "/api/sync",

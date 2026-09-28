@@ -42,6 +42,8 @@ export type StripeCharge = {
   customer: string | null;
   description: string | null;
   receipt_email: string | null;
+  payment_intent?: string | null;
+  metadata?: Record<string, string> | null;
   billing_details: { name: string | null; email: string | null; phone: string | null; address: StripeAddress } | null;
   payment_method_details: { type: string } | null;
 };
