@@ -4,7 +4,7 @@ import s from "../invoice.module.css";
 export default function InvoiceNotFound() {
   return (
     <div className={s.page}>
-      <div className={s.shell} style={{ maxWidth: 560 }}>
+      <div className={`${s.shell} ${s.shellSolo}`} style={{ maxWidth: 560 }}>
         <main className={s.paper}>
           <div className={s.stripe} aria-hidden="true">
             <span />
@@ -12,7 +12,9 @@ export default function InvoiceNotFound() {
             <span />
           </div>
           <div className={s.paperInner} style={{ textAlign: "center" }}>
-            <DhMark height={40} />
+            <div style={{ display: "flex", justifyContent: "center" }}>
+              <DhMark height={40} />
+            </div>
             <h1 className={s.number} style={{ marginTop: 14 }}>
               Invoice not found
             </h1>

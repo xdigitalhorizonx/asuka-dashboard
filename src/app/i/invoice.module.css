@@ -58,9 +58,17 @@
   grid-template-columns: minmax(0, 1fr);
   align-items: start;
 }
+/* No pay column (paid, void, not found): one centred column instead of an empty second track. */
+.shellSolo,
+.topbar.topbarSolo {
+  max-width: 820px;
+}
 @media (min-width: 980px) {
   .shell {
     grid-template-columns: minmax(0, 1fr) 380px;
+  }
+  .shellSolo {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

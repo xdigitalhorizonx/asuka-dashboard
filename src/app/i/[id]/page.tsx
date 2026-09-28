@@ -60,7 +60,7 @@ export default async function InvoicePage({ params }: Props) {
 
   return (
     <div className={`${s.page} ${inter.variable} ${nunito.variable}`}>
-      <div className={s.topbar}>
+      <div className={open ? s.topbar : `${s.topbar} ${s.topbarSolo}`}>
         <span className={s.brand}>
           <DhMark height={30} />
           <span className={s.wordmark}>Digital Horizon</span>
@@ -75,7 +75,7 @@ export default async function InvoicePage({ params }: Props) {
         </div>
       </div>
 
-      <div className={s.shell}>
+      <div className={open ? s.shell : `${s.shell} ${s.shellSolo}`}>
         <main className={s.paper} aria-label={`Invoice ${inv.number}`}>
           <div className={s.stripe} aria-hidden="true">
             <span />
