@@ -1,0 +1,68 @@
+{
+  "title": "Digital Horizon Proposal — Example Dental Studio",
+  "proposalDateISO": "2027-01-05",
+  "contact": {
+    "phone": "775.443.3880",
+    "email": "hello@digitalhorizon.dev"
+  },
+  "services": [
+    {
+      "amount": 1249.5,
+      "free": false,
+      "recurring": null
+    },
+    {
+      "amount": 0,
+      "free": true,
+      "recurring": "month"
+    },
+    {
+      "amount": 0,
+      "free": true,
+      "recurring": "month"
+    },
+    {
+      "amount": null,
+      "free": false,
+      "recurring": "month"
+    }
+  ],
+  "additionalAmounts": [],
+  "totals": {
+    "monthly": 0,
+    "oneTime": 1249.5,
+    "initial": 1249.5
+  },
+  "warnings": [],
+  "draft": {
+    "lines": [
+      {
+        "amount": 1249.5,
+        "zeroLabel": "",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 0,
+        "zeroLabel": "FREE",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 0,
+        "zeroLabel": "FREE",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 0,
+        "zeroLabel": "Included",
+        "note": "",
+        "recurring": null
+      }
+    ],
+    "total": 1249.5,
+    "notes": "",
+    "warnings": []
+  }
+}

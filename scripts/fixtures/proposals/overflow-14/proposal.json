@@ -1,0 +1,114 @@
+{
+  "client": "Northwind Trail Outfitters",
+  "proposalDate": "Dec 1, 2026",
+  "summary": "We will rebuild northwind-example.test as a full outdoor-gear storefront, migrate the product catalog and run a year-round search and email program so trail-bound shoppers find Northwind before the big-box retailers.",
+  "primaryServices": [
+    {
+      "name": "Discovery Workshop & Site Audit",
+      "description": "Stakeholder interviews, analytics review and a prioritized findings report",
+      "type": "One-Time",
+      "price": "$750"
+    },
+    {
+      "name": "Website Design & Schema Implementation",
+      "description": "Includes entire new top-tier webpage, keyword-focused content, and initial SEO / GEO foundation",
+      "type": "One-Time",
+      "price": "$3,200"
+    },
+    {
+      "name": "E-commerce Catalog Migration (1,200 SKUs)",
+      "description": "Variant mapping, redirect planning and inventory synchronization with the point-of-sale system",
+      "type": "One-Time",
+      "price": "$1,850"
+    },
+    {
+      "name": "Product Photography Retouching",
+      "description": "Background cleanup and consistent cropping for every catalog image",
+      "type": "One-Time",
+      "price": "$640"
+    },
+    {
+      "name": "SEO / GEO & Backlink Overhaul + Maintenance",
+      "description": "Continuous content, weighted activity, and marketing that compounds your competitive ranking",
+      "type": "Monthly",
+      "price": "$435 / mo",
+      "priceNote": "Bundled monthly retainer"
+    },
+    {
+      "name": "Managed Hosting & Security Monitoring",
+      "description": "Uptime monitoring, nightly backups, SSL renewals and security patching",
+      "type": "Monthly",
+      "price": "$49/mo"
+    },
+    {
+      "name": "Email Marketing Automation",
+      "description": "Abandoned-cart, restock and seasonal campaign flows built and maintained",
+      "type": "Monthly (6-month minimum term)",
+      "price": "$120 per month"
+    },
+    {
+      "name": "NAP Monthly Audit",
+      "type": "Monthly",
+      "price": "",
+      "priceNote": "Included in retainer"
+    },
+    {
+      "name": "Social Media Ad Campaigns & Image-Based Content",
+      "type": "Monthly",
+      "price": "FREE"
+    },
+    {
+      "name": "Audience Interactions & Engagement Management",
+      "type": "Monthly",
+      "price": "FREE"
+    },
+    {
+      "name": "Annual Accessibility Compliance Review",
+      "description": "WCAG 2.2 AA audit of templates and checkout with a remediation checklist",
+      "type": "Yearly",
+      "price": "$99 annually"
+    },
+    {
+      "name": "Custom KPI Dashboard",
+      "type": "Setup",
+      "price": "FREE"
+    },
+    {
+      "name": "Staff Training Session",
+      "description": "One remote session on editing products, orders and blog posts",
+      "type": "One-Time",
+      "price": "$0"
+    },
+    {
+      "name": "Launch-Week Support",
+      "description": "Same-day fixes and monitoring for the first seven days after launch",
+      "type": "One-Time",
+      "price": "$300"
+    }
+  ],
+  "totals": {
+    "monthly": "$604",
+    "oneTime": "$6,740",
+    "initialInvestment": "$7,443"
+  },
+  "additionalServices": [
+    {
+      "name": "Video Content Production",
+      "pricing": "Quoted per project (scope-dependent)"
+    },
+    {
+      "name": "Wholesale Portal",
+      "pricing": "Quoted upon request"
+    },
+    {
+      "name": "Paid Retargeted Meta Ad Campaign",
+      "pricing": "$250 + ad spend, per campaign"
+    }
+  ],
+  "notes": [
+    "We commit to a **20% increase in online revenue** in the first full season after launch.",
+    "Shoppers research gear online before every trip; a fast, well-indexed catalog captures that demand year-round.",
+    "Your KPI dashboard tracks orders, email revenue and search visibility in one place."
+  ],
+  "callToActionNote": "Once approved, we schedule the discovery workshop within five business days."
+}

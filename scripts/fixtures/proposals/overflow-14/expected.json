@@ -1,0 +1,194 @@
+{
+  "title": "Digital Horizon Proposal — Northwind Trail Outfitters",
+  "proposalDateISO": "2026-12-01",
+  "contact": {
+    "phone": "775.443.3880",
+    "email": "hello@digitalhorizon.dev"
+  },
+  "services": [
+    {
+      "amount": 750,
+      "free": false,
+      "recurring": null
+    },
+    {
+      "amount": 3200,
+      "free": false,
+      "recurring": null
+    },
+    {
+      "amount": 1850,
+      "free": false,
+      "recurring": null
+    },
+    {
+      "amount": 640,
+      "free": false,
+      "recurring": null
+    },
+    {
+      "amount": 435,
+      "free": false,
+      "recurring": "month"
+    },
+    {
+      "amount": 49,
+      "free": false,
+      "recurring": "month"
+    },
+    {
+      "amount": 120,
+      "free": false,
+      "recurring": "month"
+    },
+    {
+      "amount": null,
+      "free": false,
+      "recurring": "month"
+    },
+    {
+      "amount": 0,
+      "free": true,
+      "recurring": "month"
+    },
+    {
+      "amount": 0,
+      "free": true,
+      "recurring": "month"
+    },
+    {
+      "amount": 99,
+      "free": false,
+      "recurring": "year"
+    },
+    {
+      "amount": 0,
+      "free": true,
+      "recurring": null
+    },
+    {
+      "amount": 0,
+      "free": false,
+      "recurring": null
+    },
+    {
+      "amount": 300,
+      "free": false,
+      "recurring": null
+    }
+  ],
+  "additionalAmounts": [
+    null,
+    null,
+    null
+  ],
+  "totals": {
+    "monthly": 604,
+    "oneTime": 6740,
+    "initial": 7443
+  },
+  "warnings": [],
+  "draft": {
+    "lines": [
+      {
+        "amount": 750,
+        "zeroLabel": "",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 3200,
+        "zeroLabel": "",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 1850,
+        "zeroLabel": "",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 640,
+        "zeroLabel": "",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 435,
+        "zeroLabel": "",
+        "note": "First month · then $435.00/mo",
+        "recurring": {
+          "interval": "month",
+          "amount": 435
+        }
+      },
+      {
+        "amount": 49,
+        "zeroLabel": "",
+        "note": "First month · then $49.00/mo",
+        "recurring": {
+          "interval": "month",
+          "amount": 49
+        }
+      },
+      {
+        "amount": 120,
+        "zeroLabel": "",
+        "note": "First month · then $120.00/mo",
+        "recurring": {
+          "interval": "month",
+          "amount": 120
+        }
+      },
+      {
+        "amount": 0,
+        "zeroLabel": "Included",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 0,
+        "zeroLabel": "FREE",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 0,
+        "zeroLabel": "FREE",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 99,
+        "zeroLabel": "",
+        "note": "First year · then $99.00/yr",
+        "recurring": {
+          "interval": "year",
+          "amount": 99
+        }
+      },
+      {
+        "amount": 0,
+        "zeroLabel": "FREE",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 0,
+        "zeroLabel": "FREE",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 300,
+        "zeroLabel": "",
+        "note": "",
+        "recurring": null
+      }
+    ],
+    "total": 7443,
+    "notes": "SEO / GEO & Backlink Overhaul + Maintenance ($435.00/mo), Managed Hosting & Security Monitoring ($49.00/mo) and Email Marketing Automation ($120.00/mo) continue after the first month, and Annual Accessibility Compliance Review continues at $99.00/yr after the first year.",
+    "warnings": []
+  }
+}

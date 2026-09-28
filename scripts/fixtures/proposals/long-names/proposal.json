@@ -1,0 +1,70 @@
+{
+  "client": "Café Olé — Example Bistro & Bar at Lakeview Commons",
+  "proposalDate": "November 12, 2026",
+  "summary": "We will relaunch cafeole-example.test with a mobile-first menu, online reservations and a “Chef’s Table” booking flow, then grow local discoverability with an ongoing SEO / GEO program — so diners searching for brunch, espresso or late-night tapas find Café Olé first.",
+  "primaryServices": [
+    {
+      "name": "Comprehensive Local Search Engine Optimization, Reputation Management & Review Response Program",
+      "description": "Monthly keyword-landscape benchmarking, conversion-rate experimentation, accessibility remediation, schema maintenance and “what changed” reporting for every location’s listings",
+      "type": "Monthly",
+      "price": "$1,249.99 / mo",
+      "priceNote": "Billed on the 1st"
+    },
+    {
+      "name": "Website Redesign — Menus, Reservations & Private-Events Microsite",
+      "description": "Photography direction, internationalization-ready templates, hand-coded interactions and comprehensive documentation of the content-management workflow",
+      "type": "One-Time",
+      "price": "$12,500.50"
+    },
+    {
+      "name": "Premium Domain, DNS & Email Renewal",
+      "description": "Covers the .com and .cafe domains plus three mailboxes",
+      "type": "Annual",
+      "price": "$240 / yr"
+    },
+    {
+      "name": "Google Business Profile Verification & Photo Refresh",
+      "type": "One-Time",
+      "price": "FREE",
+      "priceNote": "Waived for launch"
+    },
+    {
+      "name": "Menu Schema & Allergen Markup",
+      "type": "Setup",
+      "price": "$385"
+    }
+  ],
+  "totals": {
+    "monthly": "$1,249.99",
+    "oneTime": "$12,885.50",
+    "initialInvestment": "$14,375.49"
+  },
+  "additionalServices": [
+    {
+      "name": "Logo Refresh & Brand Guidelines",
+      "pricing": "$350"
+    },
+    {
+      "name": "Seasonal Photo Shoot",
+      "pricing": "$600 per shoot"
+    },
+    {
+      "name": "Paid Retargeted Meta Ad Campaign",
+      "pricing": "$250 + ad spend, per campaign"
+    },
+    {
+      "name": "Quarterly Menu Updates",
+      "pricing": "$95 / mo"
+    },
+    {
+      "name": "Launch-Day Social Post",
+      "pricing": "FREE"
+    }
+  ],
+  "notes": [
+    "We commit to a **25% increase in reservation requests** within the first two quarters after launch.",
+    "Diners search “brunch near me” and “tapas Reno” every weekend — once the menus are indexed, that demand lands on your reservations page instead of a competitor’s.",
+    "Your KPI dashboard shows covers, calls and bookings side by side, so you always know what the investment is producing."
+  ],
+  "callToActionNote": "Once approved, we begin with a photography walkthrough and a kickoff call within five business days."
+}

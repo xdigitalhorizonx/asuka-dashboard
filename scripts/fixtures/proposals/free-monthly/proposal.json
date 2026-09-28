@@ -1,0 +1,39 @@
+{
+  "client": "Example Dental Studio",
+  "proposalDate": "January 5, 2027",
+  "summary": "We will refresh exampledental.test with clear service pages and online booking. Ongoing review monitoring and reporting are included at no monthly charge.",
+  "primaryServices": [
+    {
+      "name": "Website Refresh & Online Booking",
+      "description": "New service pages, booking integration and on-page SEO",
+      "type": "One-Time",
+      "price": "$1,249.50"
+    },
+    {
+      "name": "Review Monitoring",
+      "type": "Monthly",
+      "price": "FREE"
+    },
+    {
+      "name": "Monthly Performance Report",
+      "type": "Monthly",
+      "price": "FREE"
+    },
+    {
+      "name": "NAP Monthly Audit",
+      "type": "Monthly",
+      "price": ""
+    }
+  ],
+  "totals": {
+    "monthly": "FREE",
+    "oneTime": "$1,249.50",
+    "initialInvestment": "$1,249.50"
+  },
+  "additionalServices": [],
+  "notes": [
+    "We commit to a **15% increase in booked appointments** within six months.",
+    "Your monthly report shows calls, bookings and reviews in one view."
+  ],
+  "callToActionNote": "Once approved, we begin work within five business days."
+}

@@ -1,0 +1,34 @@
+{
+  "client": "Supercalifragilisticexpialidociousness Example Toy Emporium & Board-Game Collective of Northern Nevada",
+  "proposalDate": "March 14, 2027",
+  "summary": "We will build a searchable catalog and events calendar for the collective and keep it ranking for toy, puzzle and board-game searches across Northern Nevada.",
+  "primaryServices": [
+    {
+      "name": "Catalog Website & Events Calendar",
+      "description": "Searchable inventory, event sign-ups and a staff-editable news section",
+      "type": "One-Time",
+      "price": "$2,750"
+    },
+    {
+      "name": "Local SEO Retainer",
+      "description": "Monthly content, citations and ranking reports",
+      "type": "Monthly",
+      "price": "$325 / mo"
+    }
+  ],
+  "totals": {
+    "monthly": "$325",
+    "oneTime": "$2,750",
+    "initialInvestment": "$3,075"
+  },
+  "additionalServices": [
+    {
+      "name": "Tournament Livestream Setup",
+      "pricing": "Quoted upon request"
+    }
+  ],
+  "notes": [
+    "We commit to a **40% increase in event sign-ups** by the next holiday season."
+  ],
+  "callToActionNote": "Once approved, we begin work within five business days."
+}

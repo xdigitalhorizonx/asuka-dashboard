@@ -1,0 +1,102 @@
+{
+  "title": "Digital Horizon Proposal — Example Harbor Café & Oyster Bar",
+  "proposalDateISO": "2026-11-12",
+  "contact": {
+    "phone": "775.443.3880",
+    "email": "hello@digitalhorizon.dev"
+  },
+  "services": [
+    {
+      "amount": 1249.99,
+      "free": false,
+      "recurring": "month"
+    },
+    {
+      "amount": 12500.5,
+      "free": false,
+      "recurring": null
+    },
+    {
+      "amount": 240,
+      "free": false,
+      "recurring": "year"
+    },
+    {
+      "amount": 0,
+      "free": true,
+      "recurring": null
+    },
+    {
+      "amount": 450,
+      "free": false,
+      "recurring": null
+    },
+    {
+      "amount": 385,
+      "free": false,
+      "recurring": null
+    }
+  ],
+  "additionalAmounts": [
+    350,
+    null,
+    null,
+    95,
+    0
+  ],
+  "totals": {
+    "monthly": 1249.99,
+    "oneTime": 13335.5,
+    "initial": 14825.49
+  },
+  "warnings": [],
+  "draft": {
+    "lines": [
+      {
+        "amount": 1249.99,
+        "zeroLabel": "",
+        "note": "First month · then $1,249.99/mo",
+        "recurring": {
+          "interval": "month",
+          "amount": 1249.99
+        }
+      },
+      {
+        "amount": 12500.5,
+        "zeroLabel": "",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 240,
+        "zeroLabel": "",
+        "note": "First year · then $240.00/yr",
+        "recurring": {
+          "interval": "year",
+          "amount": 240
+        }
+      },
+      {
+        "amount": 0,
+        "zeroLabel": "FREE",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 450,
+        "zeroLabel": "",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 385,
+        "zeroLabel": "",
+        "note": "",
+        "recurring": null
+      }
+    ],
+    "total": 14825.49,
+    "notes": "Comprehensive Local Search Engine Optimization, Reputation Management & Review Response Program continues at $1,249.99/mo after the first month, and Premium Domain, DNS & Email Renewal continues at $240.00/yr after the first year.",
+    "warnings": []
+  }
+}

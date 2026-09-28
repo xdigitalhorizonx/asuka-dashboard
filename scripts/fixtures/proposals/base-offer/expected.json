@@ -1,0 +1,96 @@
+{
+  "title": "Digital Horizon Proposal — Example Bakery Co.",
+  "proposalDateISO": "2026-10-03",
+  "contact": {
+    "phone": "775.443.3880",
+    "email": "hello@digitalhorizon.dev"
+  },
+  "services": [
+    {
+      "amount": 1100,
+      "free": false,
+      "recurring": null
+    },
+    {
+      "amount": 435,
+      "free": false,
+      "recurring": "month"
+    },
+    {
+      "amount": null,
+      "free": false,
+      "recurring": "month"
+    },
+    {
+      "amount": 0,
+      "free": true,
+      "recurring": "month"
+    },
+    {
+      "amount": 0,
+      "free": true,
+      "recurring": "month"
+    },
+    {
+      "amount": 0,
+      "free": true,
+      "recurring": null
+    }
+  ],
+  "additionalAmounts": [
+    null,
+    null
+  ],
+  "totals": {
+    "monthly": 435,
+    "oneTime": 1100,
+    "initial": 1535
+  },
+  "warnings": [],
+  "draft": {
+    "lines": [
+      {
+        "amount": 1100,
+        "zeroLabel": "",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 435,
+        "zeroLabel": "",
+        "note": "First month · then $435.00/mo",
+        "recurring": {
+          "interval": "month",
+          "amount": 435
+        }
+      },
+      {
+        "amount": 0,
+        "zeroLabel": "Included",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 0,
+        "zeroLabel": "FREE",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 0,
+        "zeroLabel": "FREE",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 0,
+        "zeroLabel": "FREE",
+        "note": "",
+        "recurring": null
+      }
+    ],
+    "total": 1535,
+    "notes": "SEO / GEO & Backlink Overhaul + Maintenance continues at $435.00/mo after the first month.",
+    "warnings": []
+  }
+}

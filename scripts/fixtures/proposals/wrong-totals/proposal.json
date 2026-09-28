@@ -1,0 +1,38 @@
+{
+  "client": "Example Hardware Supply",
+  "proposalDate": "February 2, 2027",
+  "summary": "We will rebuild examplehardware.test and manage search and paid campaigns so contractors find the yard before driving past it.",
+  "primaryServices": [
+    {
+      "name": "Website Design & Schema Implementation",
+      "description": "Includes entire new top-tier webpage, keyword-focused content, and initial SEO / GEO foundation",
+      "type": "One-Time",
+      "price": "$1,100"
+    },
+    {
+      "name": "SEO / GEO Retainer",
+      "type": "Monthly",
+      "price": "$435 / mo"
+    },
+    {
+      "name": "Paid Search Management",
+      "type": "Monthly",
+      "price": "10% of ad spend"
+    }
+  ],
+  "totals": {
+    "monthly": "$400",
+    "oneTime": "$1,100",
+    "initialInvestment": "$1,600"
+  },
+  "additionalServices": [
+    {
+      "name": "Video Content Production",
+      "pricing": "Quoted per project (scope-dependent)"
+    }
+  ],
+  "notes": [
+    "We commit to a **30% increase in qualified leads** within six months of launch."
+  ],
+  "callToActionNote": "Once approved, we begin work within five business days."
+}

@@ -1,0 +1,70 @@
+{
+  "title": "Digital Horizon Proposal — Example Hardware Supply",
+  "proposalDateISO": "2027-02-02",
+  "contact": {
+    "phone": "775.443.3880",
+    "email": "hello@digitalhorizon.dev"
+  },
+  "services": [
+    {
+      "amount": 1100,
+      "free": false,
+      "recurring": null
+    },
+    {
+      "amount": 435,
+      "free": false,
+      "recurring": "month"
+    },
+    {
+      "amount": null,
+      "free": false,
+      "recurring": "month"
+    }
+  ],
+  "additionalAmounts": [
+    null
+  ],
+  "totals": {
+    "monthly": 400,
+    "oneTime": 1100,
+    "initial": 1600
+  },
+  "warnings": [
+    "“Paid Search Management”: couldn't read the price “10% of ad spend” — enter the amount by hand.",
+    "Monthly lines add up to $435.00, but the proposal's TOTAL MONTHLY says $400.00.",
+    "The proposal's TOTAL MONTHLY ($400.00) plus TOTAL ONE-TIME ($1,100.00) is $1,500.00, but its INITIAL INVESTMENT says $1,600.00."
+  ],
+  "draft": {
+    "lines": [
+      {
+        "amount": 1100,
+        "zeroLabel": "",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 435,
+        "zeroLabel": "",
+        "note": "First month · then $435.00/mo",
+        "recurring": {
+          "interval": "month",
+          "amount": 435
+        }
+      },
+      {
+        "amount": 0,
+        "zeroLabel": "",
+        "note": "",
+        "recurring": null
+      }
+    ],
+    "total": 1535,
+    "notes": "SEO / GEO Retainer continues at $435.00/mo after the first month.",
+    "warnings": [
+      "“Paid Search Management”: couldn't read the price “10% of ad spend” — enter the amount by hand.",
+      "Monthly lines add up to $435.00, but the proposal's TOTAL MONTHLY says $400.00.",
+      "This invoice totals $1,535.00, but the proposal's INITIAL INVESTMENT says $1,600.00."
+    ]
+  }
+}

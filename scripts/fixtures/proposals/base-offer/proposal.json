@@ -1,0 +1,61 @@
+{
+  "client": "Example Bakery Co.",
+  "proposalDate": "October 3, 2026",
+  "summary": "We will rebuild examplebakery.test as a fast, search-ready storefront and run an ongoing SEO / GEO program so nearby customers find the bakery first. Setup includes a KPI dashboard so every dollar is visible.",
+  "primaryServices": [
+    {
+      "name": "Website Design & Schema Implementation",
+      "description": "Includes entire new top-tier webpage, keyword-focused content, and initial SEO / GEO foundation",
+      "type": "One-Time",
+      "price": "$1,100"
+    },
+    {
+      "name": "SEO / GEO & Backlink Overhaul + Maintenance",
+      "description": "Continuous content, weighted activity, and marketing that compounds your competitive ranking",
+      "type": "Monthly",
+      "price": "$435 / mo",
+      "priceNote": "Bundled monthly retainer"
+    },
+    {
+      "name": "NAP Monthly Audit",
+      "type": "Monthly",
+      "price": ""
+    },
+    {
+      "name": "Social Media Ad Campaigns & Image-Based Content",
+      "type": "Monthly",
+      "price": "FREE"
+    },
+    {
+      "name": "Audience Interactions & Engagement Management",
+      "type": "Monthly",
+      "price": "FREE"
+    },
+    {
+      "name": "Custom KPI Dashboard",
+      "type": "Setup",
+      "price": "FREE"
+    }
+  ],
+  "totals": {
+    "monthly": "$435",
+    "oneTime": "$1,100",
+    "initialInvestment": "$1,535"
+  },
+  "additionalServices": [
+    {
+      "name": "Video Content Production",
+      "pricing": "Quoted per project (scope-dependent)"
+    },
+    {
+      "name": "Paid Retargeted Meta Ad Campaign",
+      "pricing": "$250 + ad spend, per campaign"
+    }
+  ],
+  "notes": [
+    "We commit to a **30% increase in qualified leads** within six months of launch.",
+    "Local searches for fresh bread and custom cakes are ready to convert once the site is properly indexed.",
+    "Your KPI dashboard shows exactly what the investment is producing."
+  ],
+  "callToActionNote": "Once approved, we begin work within five business days and schedule a kickoff call to align on priorities and dashboard scope."
+}

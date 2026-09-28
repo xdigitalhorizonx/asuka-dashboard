@@ -1,0 +1,51 @@
+{
+  "title": "Digital Horizon Proposal — Supercalifragilisticexpialidociousness Example Toy Emporium & Board-Game Collective of Northern Nevada",
+  "proposalDateISO": "2027-03-14",
+  "contact": {
+    "phone": "775.443.3880",
+    "email": "hello@digitalhorizon.dev"
+  },
+  "services": [
+    {
+      "amount": 2750,
+      "free": false,
+      "recurring": null
+    },
+    {
+      "amount": 325,
+      "free": false,
+      "recurring": "month"
+    }
+  ],
+  "additionalAmounts": [
+    null
+  ],
+  "totals": {
+    "monthly": 325,
+    "oneTime": 2750,
+    "initial": 3075
+  },
+  "warnings": [],
+  "draft": {
+    "lines": [
+      {
+        "amount": 2750,
+        "zeroLabel": "",
+        "note": "",
+        "recurring": null
+      },
+      {
+        "amount": 325,
+        "zeroLabel": "",
+        "note": "First month · then $325.00/mo",
+        "recurring": {
+          "interval": "month",
+          "amount": 325
+        }
+      }
+    ],
+    "total": 3075,
+    "notes": "Local SEO Retainer continues at $325.00/mo after the first month.",
+    "warnings": []
+  }
+}
