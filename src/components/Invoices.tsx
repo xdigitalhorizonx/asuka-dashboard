@@ -449,7 +449,8 @@ export function Invoices() {
         </p>
       )}
 
-      <div className="card" style={{ overflow: "hidden" }}>
+      {/* no overflow clipping here: each row's More menu drops out of this card */}
+      <div className="card">
         <div className="rows label" style={{ ["--cols" as string]: "96px minmax(0, 1fr) 118px 118px 104px 250px", ["--cols-sm" as string]: "minmax(0, 1fr) 100px", padding: "10px 14px", borderBottom: "1px solid var(--color-border)" }}>
           <span className="hide-sm">Number</span>
           <span>Client</span>
@@ -533,24 +534,50 @@ export function Invoices() {
 
 function RowMenu({ inv, busy, onEdit, onAct, mailto }: { inv: Invoice; busy: boolean; onEdit: () => void; onAct: (a: "void" | "unvoid" | "delete" | "refresh") => void; mailto: string | null }) {
   const [open, setOpen] = useState(false);
+  /** Open upward when the row sits too close to the bottom of the window for the menu to fit. */
+  const [up, setUp] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => {
       if (!ref.current?.contains(e.target as Node)) setOpen(false);
     };
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("mousedown", close);
-    return () => window.removeEventListener("mousedown", close);
+    window.addEventListener("keydown", esc);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", esc);
+    };
   }, [open]);
   const item: CSSProperties = { display: "block", width: "100%", textAlign: "left", padding: "8px 12px", background: "transparent", border: 0, color: "inherit", font: "inherit", fontSize: 14, cursor: "pointer", textDecoration: "none", borderRadius: 8 };
   const unpaid = inv.payments.length === 0;
+  // Worst case is 7 items at ~37px each plus the menu's padding and gap.
+  const MENU_PX = 290;
   return (
     <div ref={ref} style={{ position: "relative" }}>
-      <button type="button" className="btn" aria-haspopup="menu" aria-expanded={open} disabled={busy} onClick={() => setOpen((v) => !v)} style={{ minHeight: 32, padding: "6px 10px" }}>
+      <button
+        type="button"
+        className="btn"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={busy}
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setUp(window.innerHeight - r.bottom < MENU_PX && r.top > MENU_PX);
+          setOpen((v) => !v);
+        }}
+        style={{ minHeight: 32, padding: "6px 10px" }}
+      >
         {busy ? "…" : "More"}
       </button>
       {open && (
-        <div role="menu" className="card" style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 20, minWidth: 190, padding: 6, boxShadow: "0 12px 30px -12px rgba(58,42,54,0.35)" }} onClick={() => setOpen(false)}>
+        <div
+          role="menu"
+          className="card"
+          style={{ position: "absolute", right: 0, ...(up ? { bottom: "calc(100% + 6px)" } : { top: "calc(100% + 6px)" }), zIndex: 20, minWidth: 190, padding: 6, boxShadow: "0 12px 30px -12px rgba(58,42,54,0.35)" }}
+          onClick={() => setOpen(false)}
+        >
           <a role="menuitem" style={item} href={`/api/public/invoices/${inv.id}/pdf`}>
             Download PDF
           </a>
