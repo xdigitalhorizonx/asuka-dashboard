@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   appleWebApp: {
     title: APP_NAME,
     capable: true,
-    statusBarStyle: "black",
+    statusBarStyle: "default",
   },
   icons: {
     icon: [
@@ -35,15 +35,15 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#141327",
-  colorScheme: "dark",
+  themeColor: "#fcf8fb",
+  colorScheme: "light",
 };
 
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${jakarta.variable} h-full dark`}>
+    <html lang="en" className={`${jakarta.variable} h-full`}>
       <body className="min-h-full antialiased">{children}</body>
     </html>
   );

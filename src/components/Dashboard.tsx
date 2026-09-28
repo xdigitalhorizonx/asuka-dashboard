@@ -222,7 +222,7 @@ function Spark({ n, max = 8, color = "var(--color-accent)" }: { n: number; max?:
   return (
     <div style={{ display: "flex", gap: 2, alignItems: "flex-end", height: 18 }}>
       {bars.map((on, i) => (
-        <div key={i} style={{ width: 6, height: 6 + (on ? (i + 1) * 1.4 : 4), background: on ? color : "rgba(255,255,255,0.08)", borderRadius: 1 }} />
+        <div key={i} style={{ width: 6, height: 6 + (on ? (i + 1) * 1.4 : 4), background: on ? color : tint(color, 16), borderRadius: 1 }} />
       ))}
     </div>
   );
@@ -274,7 +274,7 @@ function Overview({ store, dueToday, openReminders, pipeline, setTab }: { store:
     <div style={{ display: "grid", gap: 16 }}>
       <div className="tiles">
         {tiles.map((c) => (
-          <button key={c.l} type="button" onClick={() => setTab(c.t)} className="card" style={{ padding: 16, textAlign: "left", cursor: "pointer", transition: "border-color 200ms, background-color 200ms", boxShadow: `inset 0 2px 0 0 ${tint(c.hue, 70)}, inset 0 1px 0 rgba(255,255,255,0.06)` }}>
+          <button key={c.l} type="button" onClick={() => setTab(c.t)} className="card" style={{ padding: 16, textAlign: "left", cursor: "pointer", transition: "border-color 200ms, background-color 200ms", background: `linear-gradient(180deg, ${tint(c.hue, 7)}, transparent 75%), var(--color-card)`, boxShadow: `inset 0 2px 0 0 ${tint(c.hue, 70)}, var(--shadow-card)` }}>
             <div className="total" style={{ color: c.hue }}>{c.v}</div>
             <div className="label" style={{ marginTop: 6 }}>{c.l}</div>
             <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 8 }}>
@@ -355,9 +355,9 @@ function GoogleCard({ store }: { store: Store }) {
     </span>
   );
   return (
-    <section className="card" style={{ padding: 18, display: "grid", gap: 10, boxShadow: `inset 0 2px 0 0 ${tint(dot, 70)}` }}>
+    <section className="card" style={{ padding: 18, display: "grid", gap: 10, boxShadow: `inset 0 2px 0 0 ${tint(dot, 70)}, var(--shadow-card)` }}>
       <h2 className="card-title" style={{ marginBottom: 0, display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ width: 6, height: 6, borderRadius: "50%", background: dot, boxShadow: `0 0 6px ${dot}` }} />
+        <span style={{ width: 6, height: 6, borderRadius: "50%", background: dot, boxShadow: `0 0 0 3px ${tint(dot, 18)}` }} />
         Google account
       </h2>
       {!g.configured ? (
@@ -454,12 +454,12 @@ function Reminders({ store, notice, dismissNotice }: { store: Store; notice: str
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           {PRI.map((p) => (
-            <button type="button" key={p} onClick={() => setPriority(p)} className="btn" style={{ flex: 1, padding: "7px 0", color: priColor(p), borderColor: priority === p ? priColor(p) : "var(--color-border)" }}>{PRI_LABEL[p]}</button>
+            <button type="button" key={p} onClick={() => setPriority(p)} className="btn" style={{ flex: 1, padding: "7px 0", color: priColor(p), borderColor: priority === p ? priColor(p) : "var(--color-border)", background: priority === p ? tint(priColor(p), 10) : undefined }}>{PRI_LABEL[p]}</button>
           ))}
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           <button type="button" onClick={() => setSource("asuka")} className={`btn${source === "asuka" ? " btn-primary" : ""}`} aria-pressed={source === "asuka"}>ASUKA</button>
-          <button type="button" onClick={() => setSource("manual")} className="btn" style={{ padding: "6px 10px", color: source === "manual" ? "var(--color-accent)" : "var(--color-muted)", borderColor: source === "manual" ? "var(--color-accent)" : "var(--color-border)" }}>MANUAL</button>
+          <button type="button" onClick={() => setSource("manual")} className="btn" style={{ padding: "6px 10px", color: source === "manual" ? "var(--color-accent)" : "var(--color-muted)", borderColor: source === "manual" ? "var(--color-accent)" : "var(--color-border)", background: source === "manual" ? tint("var(--color-accent)", 10) : undefined }}>MANUAL</button>
         </div>
         <button className="btn btn-primary" style={{ padding: 10 }}>ADD</button>
       </form>
@@ -468,7 +468,7 @@ function Reminders({ store, notice, dismissNotice }: { store: Store; notice: str
       <div>
         {noticeView && (
           <div role="status" className="card" style={{ padding: "12px 14px", marginBottom: 12, display: "flex", gap: 10, alignItems: "center", borderColor: tint(noticeHue, 45), background: tint(noticeHue, 8) }}>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: noticeHue, boxShadow: `0 0 6px ${noticeHue}`, flexShrink: 0 }} />
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: noticeHue, boxShadow: `0 0 0 3px ${tint(noticeHue, 18)}`, flexShrink: 0 }} />
             <span style={{ fontSize: 14, flex: 1 }}>{noticeView.text}</span>
             <button type="button" className="btn btn-ghost" onClick={dismissNotice} aria-label="Dismiss" style={{ padding: "4px 8px" }}>×</button>
           </div>
@@ -478,7 +478,7 @@ function Reminders({ store, notice, dismissNotice }: { store: Store; notice: str
             <button key={f} type="button" onClick={() => setFilter(f)} className={`btn${filter === f ? " btn-primary" : ""}`} aria-pressed={filter === f}>{f.toUpperCase()}</button>
           ))}
           <span className="label" title={store.remindersError || (google ? "Reminders are read from and written to this Google Tasks list" : "Press Connect Google to back reminders with Google Tasks")} style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, color: badgeColor }}>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: badgeColor, boxShadow: `0 0 6px ${badgeColor}` }} />
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: badgeColor, boxShadow: `0 0 0 3px ${tint(badgeColor, 18)}` }} />
             {badge}
           </span>
         </div>
@@ -492,7 +492,7 @@ function Reminders({ store, notice, dismissNotice }: { store: Store; notice: str
               {store.remindersPending === 1 ? " reminder" : " reminders"} from before Google Tasks was connected {store.remindersPending === 1 ? "isn't" : "aren't"} in the list yet.
             </span>
             <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-              <button type="button" className="btn" disabled={store.remindersBusy} onClick={store.migrateVaultReminders} style={{ background: "var(--color-amber)", borderColor: "var(--color-amber)", color: "var(--color-on-primary)" }}>
+              <button type="button" className="btn" disabled={store.remindersBusy} onClick={store.migrateVaultReminders} style={{ background: tint("var(--color-amber)", 20), borderColor: tint("var(--color-amber)", 55), color: "var(--color-on-primary)" }}>
                 {store.remindersBusy ? "Moving…" : "Move to Google Tasks"}
               </button>
               <button type="button" className="btn btn-ghost" disabled={store.remindersBusy} onClick={() => { if (window.confirm(`Discard ${store.remindersPending} old vault reminder${store.remindersPending === 1 ? "" : "s"}? They will not be moved to Google Tasks.`)) store.discardVaultReminders(); }}>
@@ -578,7 +578,7 @@ function CalendarView({ reminders, leads, googleCalendar, monthOffset, setMonthO
             const isToday = iso === today;
             const isSel = iso === selected;
             return (
-              <button key={iso} type="button" onClick={() => setSelected(iso)} className="cal-cell" aria-pressed={isSel} style={{ borderRadius: 12, border: `1px solid ${isSel ? "var(--color-selected-edge)" : isToday ? "rgba(113,218,202,0.55)" : "var(--color-border)"}`, background: isSel ? "var(--color-selected)" : "transparent", padding: 6, textAlign: "left", cursor: "pointer", color: "inherit", minWidth: 0, transition: "background-color 200ms, border-color 200ms" }}>
+              <button key={iso} type="button" onClick={() => setSelected(iso)} className="cal-cell" aria-pressed={isSel} style={{ borderRadius: 12, border: `1px solid ${isSel ? "var(--color-selected-edge)" : isToday ? tint("var(--color-accent)", 55) : "var(--color-border)"}`, background: isSel ? "var(--color-selected)" : "transparent", padding: 6, textAlign: "left", cursor: "pointer", color: "inherit", minWidth: 0, transition: "background-color 200ms, border-color 200ms" }}>
                 <div style={{ fontSize: 13, color: isToday ? "var(--color-accent)" : "var(--color-muted)" }}>{day}</div>
                 <div style={{ display: "flex", gap: 3, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
                   {events.slice(0, 3).map((e) => <span key={e.id} title={`${eventTime(e)} ${e.title}`} style={{ width: 10, height: 4, borderRadius: 2, background: "var(--color-sky)" }} />)}

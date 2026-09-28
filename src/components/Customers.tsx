@@ -153,7 +153,7 @@ export function Customers({ store }: { store: Store }) {
 
       <div className="tiles-3">
         {tiles.map((t) => (
-          <div key={t.l} className="card" style={{ padding: 18, boxShadow: `inset 0 2px 0 0 ${tint(t.hue, 70)}, inset 0 1px 0 rgba(255,255,255,0.06)` }}>
+          <div key={t.l} className="card" style={{ padding: 18, background: `linear-gradient(180deg, ${tint(t.hue, 7)}, transparent 75%), var(--color-card)`, boxShadow: `inset 0 2px 0 0 ${tint(t.hue, 70)}, var(--shadow-card)` }}>
             <div className="total" style={{ color: t.hue }}>{t.v}</div>
             <div className="label" style={{ marginTop: 6 }}>{t.l}</div>
             <div style={{ marginTop: 8, fontSize: 13, color: `color-mix(in srgb, ${t.hue} 80%, var(--color-muted))` }}>{t.d}</div>
@@ -360,7 +360,7 @@ function CustomerDetail({ customer, onPatch, onDelete }: { customer: Customer; o
                     aria-checked={on}
                     className="btn"
                     onClick={() => setTx({ ...tx, method: m.id })}
-                    style={{ flex: 1, color: on ? "var(--color-on-primary)" : methodColor(m.id), background: on ? methodColor(m.id) : undefined, borderColor: methodColor(m.id) }}
+                    style={{ flex: 1, color: on ? "var(--color-on-primary)" : methodColor(m.id), background: on ? tint(methodColor(m.id), 18) : undefined, borderColor: on ? methodColor(m.id) : tint(methodColor(m.id), 45) }}
                   >
                     {m.label}
                   </button>

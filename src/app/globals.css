@@ -1,40 +1,64 @@
 @import "tailwindcss";
 
-/* ───────────────────────── Violet Glass tokens · pastel edition ─────────────────────────
-   Central Dogma runs the Violet Glass layout on a pastel palette: every accent is a soft
-   tint on deep plum, and each section of the app owns its own hue (see NAV in Dashboard.tsx),
-   so the board reads calm at night without collapsing into one colour. */
+/* ───────────────────────── Digital Horizon light · pastel edition ─────────────────────────
+   Central Dogma wears Digital Horizon's light brand: white surfaces, plum ink, a pink primary
+   and a blue secondary over a blush stage with soft pink/blue blooms (digitalhorizon.dev).
+
+   Every hue token below is an INK: dark enough to read as text on white (≥5.5:1, so it still
+   clears 4.5:1 on its own tint up to ~14%). The pastel look comes from tints — `tint(hue, pct)`
+   in lib/crm.ts mixes an ink with transparent, which over white yields that hue's pastel.
+   Each section of the app owns one hue (see NAV in Dashboard.tsx), so the board stays calm
+   without collapsing into one colour. */
 :root {
-  --color-bg: #141327;        /* main background (stage) */
-  --color-surface: #211f37;   /* app window */
-  --color-card: #2b2842;      /* content panels */
-  --color-text: #f4f0ff;      /* main text */
-  --color-muted: #c0b9d4;     /* secondary text */
-  --color-border: #4b4467;    /* borders */
-  --color-primary: #c9b3ff;   /* main accent — pastel lavender */
-  --color-on-primary: #211834;/* dark text on pastel buttons */
-  --color-accent: #9ee8db;    /* secondary accent — pastel teal */
-  --color-selected: #403251;  /* selected items */
+  color-scheme: light;
+
+  --color-bg: #fcf8fb;        /* stage: blush white under the blooms */
+  --color-surface: #ffffff;   /* app window, buttons, inner tiles */
+  --color-card: #ffffff;      /* content panels */
+  --color-field: #ffffff;     /* text inputs */
+  --color-text: #3a2a36;      /* plum ink — 13.4:1 */
+  --color-muted: #665e6c;     /* secondary text — 6.2:1 */
+  --color-placeholder: #7a7180; /* 4.7:1 */
+  --color-border: rgba(74, 45, 66, 0.11);        /* hairlines */
+  --color-border-strong: rgba(74, 45, 66, 0.19); /* control outlines */
+  --color-primary: #b03c74;   /* brand pink (ink) */
+  --color-primary-soft: #f8cee0; /* pastel pink fill — brand pink 30% on white */
+  --color-primary-line: #f2a5c6; /* deeper pastel pink edge — DH accent-soft */
+  --color-on-primary: #3a2a36; /* plum ink on pastel fills */
+  --color-accent: #1968bc;    /* brand blue (ink) — links, secondary accent */
+  --color-blue: #1968bc;      /* literal copy of --color-accent for section use */
+  --color-focus: #1968bc;     /* keyboard focus ring — DH uses its blue */
+  --color-selected: #fcedf4;  /* selected items — brand pink 11% on white */
   --color-selected-edge: var(--color-primary);
+  --color-scrollbar: #dccbd7;
 
-  /* semantic (not accents): state colors for priority, stages, files */
-  --color-green: #a8ecc4;     /* mint */
-  --color-amber: #ffd39a;     /* apricot */
-  --color-violet: #e6b3ff;    /* appointments / orchid — distinct from the lavender accent */
-  --color-danger: #ffa3b5;    /* rose: errors, destructive actions, high priority */
+  /* semantic (not accents): state colours for priority, stages, files */
+  --color-green: #00783b;     /* mint: success, paid, closed/won */
+  --color-amber: #9a5702;     /* apricot: medium priority, proposals, warnings */
+  --color-violet: #8251b0;    /* orchid: appointments — distinct from lavender */
+  --color-danger: #b44044;    /* rose-red: errors, destructive actions, high priority */
 
-  /* extra pastels so sections can differ from one another.
-     --color-lavender is a literal copy of --color-primary so a dock item can be
-     given "lavender" without creating a cyclic --color-primary reference. */
-  --color-lavender: #c9b3ff;
-  --color-sky: #9bd8ff;
-  --color-lemon: #f5eaa3;
-  --color-lilac: #e5b8f4;
-  --color-peach: #ffbfa3;
-  --color-rose: var(--color-danger);
+  /* section hues — literal values, so a dock item can set --color-primary to any of them */
+  --color-rose: #b03c74;      /* brand pink: Overview */
+  --color-lavender: #635abd;  /* CRM */
+  --color-sky: #077094;       /* Calendar, Google Calendar events */
+  --color-lemon: #836300;     /* Notes */
+  --color-lilac: #9b4796;     /* Attachments */
+  --color-peach: #ac4a1e;
+  --color-teal: #09746e;      /* Invoices */
   --color-mint: var(--color-green);
   --color-apricot: var(--color-amber);
-  --color-teal: var(--color-accent);
+
+  /* brand pastels — washes and fills only, never text */
+  --brand-pink: #e85c97;
+  --brand-blue: #4f93da;
+  --brand-green: #59c07f;
+
+  /* soft, plum-tinted elevation */
+  --shadow-card: 0 1px 2px rgba(74, 45, 66, 0.04), 0 8px 24px -16px rgba(74, 45, 66, 0.22);
+  --shadow-window: 0 1px 3px rgba(74, 45, 66, 0.05), 0 22px 50px -24px rgba(74, 45, 66, 0.24),
+    0 40px 90px -48px rgba(79, 147, 218, 0.28);
+  --shadow-control: 0 1px 2px rgba(74, 45, 66, 0.06);
 
   --font-body: var(--font-jakarta), "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   /* Plus Jakarta Sans throughout — legacy mono aliases resolve to the same face */
@@ -70,7 +94,12 @@ body {
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--color-border) transparent;
+  scrollbar-color: var(--color-scrollbar) transparent;
+}
+
+::selection {
+  background: var(--color-primary-soft);
+  color: var(--color-text);
 }
 
 button,
@@ -86,7 +115,7 @@ select {
   font-family: var(--font-body);
 }
 
-/* ───────────────────────── Stage, window, glows ───────────────────────── */
+/* ───────────────────────── Stage, window, blooms ───────────────────────── */
 .stage {
   position: relative;
   min-height: 100vh;
@@ -98,24 +127,27 @@ select {
 .stage::after {
   content: "";
   position: fixed;
+  inset: 0;
   z-index: -1;
-  width: 60vmax;
-  height: 60vmax;
-  border-radius: 50%;
   pointer-events: none;
-  filter: blur(40px);
 }
 .stage::before {
-  /* lavender glow behind the upper-right corner */
-  top: -30vmax;
-  right: -22vmax;
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--color-primary) 28%, transparent), transparent 70%);
+  /* Digital Horizon's atmospheric wash: pink and blue blooms (plus a breath of green) */
+  background:
+    radial-gradient(1100px 700px at 8% -8%, rgba(232, 92, 151, 0.13), transparent 60%),
+    radial-gradient(1000px 800px at 104% 6%, rgba(79, 147, 218, 0.16), transparent 58%),
+    radial-gradient(1000px 820px at 90% 112%, rgba(79, 147, 218, 0.1), transparent 60%),
+    radial-gradient(800px 640px at 4% 108%, rgba(232, 92, 151, 0.08), transparent 62%),
+    radial-gradient(760px 620px at 42% 112%, rgba(89, 192, 127, 0.06), transparent 62%);
 }
 .stage::after {
-  /* rose glow behind the lower-left corner */
-  bottom: -32vmax;
-  left: -24vmax;
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--color-rose) 20%, transparent), transparent 70%);
+  /* faint technical grid that fades out below the top of the screen */
+  background-image:
+    linear-gradient(rgba(120, 90, 120, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(120, 90, 120, 0.05) 1px, transparent 1px);
+  background-size: 46px 46px;
+  -webkit-mask-image: radial-gradient(120% 90% at 50% 0%, #000 30%, transparent 90%);
+  mask-image: radial-gradient(120% 90% at 50% 0%, #000 30%, transparent 90%);
 }
 
 /* pixel-art brand mark (the home-screen icon, reused in the top bar + login) */
@@ -126,21 +158,25 @@ select {
 .brand-mark {
   flex-shrink: 0;
   border-radius: 12px;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent), 0 6px 18px color-mix(in srgb, var(--color-primary) 25%, transparent);
+  box-shadow:
+    0 0 0 1px rgba(74, 45, 66, 0.1),
+    0 6px 16px -6px color-mix(in srgb, var(--brand-pink) 55%, transparent);
 }
 
 .window {
   max-width: 1440px;
   margin: 0 auto;
   min-height: calc(100vh - 32px);
-  background: var(--color-surface);
+  /* white, with a breath of the stage's blooms so the white cards float on it */
+  background:
+    radial-gradient(900px 520px at 0% 0%, rgba(232, 92, 151, 0.075), transparent 70%),
+    radial-gradient(900px 560px at 100% 0%, rgba(79, 147, 218, 0.09), transparent 70%),
+    radial-gradient(1000px 720px at 100% 100%, rgba(79, 147, 218, 0.05), transparent 70%),
+    radial-gradient(900px 640px at 0% 100%, rgba(232, 92, 151, 0.045), transparent 70%),
+    var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-card);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.07),
-    inset 0 0 0 1px rgba(181, 154, 255, 0.05),
-    0 30px 80px rgba(6, 4, 20, 0.55),
-    0 8px 24px rgba(6, 4, 20, 0.35);
+  box-shadow: var(--shadow-window);
   display: flex;
   flex-direction: column;
   overflow: clip;
@@ -151,8 +187,24 @@ select {
   background: var(--color-card);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-card);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  box-shadow: var(--shadow-card);
   min-width: 0;
+}
+/* clickable cards: overview tiles (button) and file pickers (label, e.g. the dashed drop zone) */
+label.card {
+  border-color: rgba(74, 45, 66, 0.26);
+  transition: border-color var(--motion) var(--ease), background-color var(--motion) var(--ease);
+}
+/* hover styles only where there is a real pointer, so taps on phones never leave a sticky tint */
+@media (hover: hover) {
+  /* hue-neutral: tiles carry their own section colour, so the hover edge must not add pink to a sky tile */
+  button.card:hover,
+  label.card:hover {
+    border-color: rgba(74, 45, 66, 0.3);
+  }
+  label.card:hover {
+    background: color-mix(in srgb, var(--color-primary) 3%, var(--color-card));
+  }
 }
 .card-title {
   font-size: 19px;
@@ -198,9 +250,10 @@ select {
   min-height: 36px;
   padding: 8px 14px;
   border-radius: var(--radius-btn);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-strong);
   background: var(--color-surface);
   color: var(--color-text);
+  box-shadow: var(--shadow-control);
   font-size: 12px;
   font-weight: 500;
   letter-spacing: 0.04em;
@@ -215,9 +268,11 @@ select {
     transform 120ms var(--ease),
     box-shadow var(--motion) var(--ease);
 }
-.btn:hover {
-  border-color: color-mix(in srgb, var(--color-primary) 55%, transparent);
-  background: #2f2b48;
+@media (hover: hover) {
+  .btn:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--color-primary) 40%, var(--color-border-strong));
+    background: color-mix(in srgb, var(--color-primary) 6%, var(--color-surface));
+  }
 }
 .btn:active {
   transform: translateY(1px);
@@ -227,45 +282,59 @@ select {
   opacity: 0.55;
 }
 .btn-primary {
-  background: var(--color-primary);
-  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary-line);
   color: var(--color-on-primary);
 }
-.btn-primary:hover {
-  background: color-mix(in srgb, var(--color-primary) 88%, white);
-  border-color: color-mix(in srgb, var(--color-primary) 88%, white);
+@media (hover: hover) {
+  .btn-primary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--brand-pink) 40%, white);
+    border-color: color-mix(in srgb, var(--brand-pink) 70%, white);
+  }
 }
 .btn-danger {
   color: var(--color-danger);
-  border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
+  border-color: color-mix(in srgb, var(--color-danger) 35%, transparent);
 }
-.btn-danger:hover {
-  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
-  border-color: var(--color-danger);
+@media (hover: hover) {
+  .btn-danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-danger) 9%, var(--color-surface));
+    border-color: var(--color-danger);
+  }
 }
 .btn-ghost {
   background: transparent;
+  box-shadow: none;
 }
 
 .input {
   width: 100%;
   min-height: 40px;
   border-radius: var(--radius-input);
-  border: 1px solid var(--color-border);
-  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-field);
   color: var(--color-text);
   padding: 9px 12px;
   font-size: 15px;
   line-height: 1.3;
   outline: none;
+  box-shadow: inset 0 1px 2px rgba(74, 45, 66, 0.04);
   transition: border-color var(--motion) var(--ease), box-shadow var(--motion) var(--ease);
 }
 .input::placeholder {
-  color: rgba(192, 185, 212, 0.7);
+  color: var(--color-placeholder);
+}
+@media (hover: hover) {
+  .input:hover {
+    border-color: rgba(74, 45, 66, 0.28);
+  }
 }
 .input:focus-visible {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 25%, transparent);
+  outline: none;
+  border-color: color-mix(in srgb, var(--color-primary) 70%, white);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--brand-pink) 18%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--brand-blue) 8%, transparent);
 }
 input[type="tel"],
 .input-phone {
@@ -274,12 +343,12 @@ input[type="tel"],
 input[type="date"],
 input[type="time"],
 input[type="datetime-local"] {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 /* Keyboard focus: visible on everything interactive */
 :where(button, a, input, textarea, select, [tabindex]):focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
@@ -298,7 +367,8 @@ input[type="datetime-local"] {
   width: 36px;
   height: 36px;
   border-radius: 12px;
-  background: var(--color-primary);
+  background: var(--color-primary-soft);
+  border: 1px solid var(--color-primary-line);
   color: var(--color-on-primary);
   display: grid;
   place-items: center;
@@ -306,7 +376,6 @@ input[type="datetime-local"] {
   font-weight: 600;
   letter-spacing: 0.02em;
   flex-shrink: 0;
-  box-shadow: 0 6px 18px color-mix(in srgb, var(--color-primary) 30%, transparent);
 }
 .sync-pill {
   display: inline-flex;
@@ -315,7 +384,7 @@ input[type="datetime-local"] {
   padding: 6px 10px;
   border-radius: 999px;
   border: 1px solid var(--color-border);
-  background: var(--color-card);
+  background: var(--color-bg);
   font-size: 12px;
   font-weight: 500;
   color: var(--color-muted);
@@ -330,12 +399,12 @@ input[type="datetime-local"] {
   height: 8px;
   border-radius: 50%;
   background: var(--color-green);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--color-green) 70%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-green) 18%, transparent);
   flex-shrink: 0;
 }
 .dot-live.error {
   background: var(--color-danger);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--color-danger) 70%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-danger) 18%, transparent);
 }
 
 .dock {
@@ -363,22 +432,25 @@ input[type="datetime-local"] {
     background-color var(--motion) var(--ease),
     border-color var(--motion) var(--ease),
     color var(--motion) var(--ease),
+    box-shadow var(--motion) var(--ease),
     transform 120ms var(--ease);
 }
 /* Each dock item sets its own --color-primary inline (its section hue), so the
    glyph, hover tint and active state all take that colour. */
-.dock-item:hover {
-  color: var(--color-text);
-  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+@media (hover: hover) {
+  .dock-item:hover {
+    color: var(--color-text);
+    background: color-mix(in srgb, var(--color-primary) 7%, transparent);
+  }
 }
 .dock-item:active {
   transform: translateY(1px);
 }
 .dock-item[aria-current="page"] {
-  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
-  border-color: color-mix(in srgb, var(--color-primary) 50%, transparent);
+  background: color-mix(in srgb, var(--color-primary) 11%, white);
+  border-color: color-mix(in srgb, var(--color-primary) 38%, white);
   color: var(--color-primary);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  box-shadow: 0 6px 14px -10px color-mix(in srgb, var(--color-primary) 70%, transparent);
 }
 .dock-item svg {
   width: 20px;
@@ -476,12 +548,18 @@ main.content {
   padding: 10px 14px;
   transition: background-color var(--motion) var(--ease), border-color var(--motion) var(--ease);
 }
-.row-btn:hover {
-  background: color-mix(in srgb, var(--color-primary) 6%, transparent);
+@media (hover: hover) {
+  .row-btn:hover {
+    background: color-mix(in srgb, var(--color-primary) 4%, transparent);
+  }
 }
 .row-btn[aria-selected="true"] {
   background: var(--color-selected);
   border-left-color: var(--color-selected-edge);
+}
+/* rows live in scrolling lists, which would clip an outset ring — draw it inside */
+.row-btn:focus-visible {
+  outline-offset: -2px;
 }
 
 /* kanban: 5 columns wide, 2 on tablet, 1 on phones */

@@ -1,13 +1,14 @@
 import type { CSSProperties, JSX, ReactNode } from "react";
 
 /**
- * Violet Glass icon set — seven original glyphs drawn on a 24×24 grid.
+ * Glass icon set — eight original glyphs drawn on a 24×24 grid.
  *
  * Style rules (shared by every glyph):
- *  - rounded 1.6px outlines in the lavender accent (`--color-primary`)
- *  - the main body of each glyph is filled with the same lavender at 20%,
- *    so it reads as a lit glass object on the dark UI
- *  - a few small detail strokes use a lighter lavender tint
+ *  - rounded 1.6px outlines in the section ink (`--color-primary`; each dock
+ *    item sets it to its own hue)
+ *  - the main body of each glyph is filled with the same hue at 20%, so it
+ *    reads as a pastel glass object on the white UI
+ *  - a few small detail strokes use a lighter tint of that hue
  *  - every shape stays ≥1.5px inside the 24×24 box (stroke included)
  */
 
@@ -18,7 +19,8 @@ export type IconName =
   | "notes"
   | "files"
   | "crm"
-  | "customers";
+  | "customers"
+  | "invoices";
 
 export const ICON_NAMES: IconName[] = [
   "overview",
@@ -28,10 +30,12 @@ export const ICON_NAMES: IconName[] = [
   "files",
   "crm",
   "customers",
+  "invoices",
 ];
 
 const PRIMARY = "var(--color-primary)";
-const LIGHT = "rgba(217,204,255,0.9)";
+/** Detail strokes: the section hue lifted halfway to white, so it reads as a lighter tint on white. */
+const LIGHT = "color-mix(in srgb, var(--color-primary) 55%, white)";
 const GLASS = 0.2;
 
 const GLYPHS: Record<IconName, ReactNode> = {
@@ -115,6 +119,20 @@ const GLYPHS: Record<IconName, ReactNode> = {
       <rect x="3" y="9" width="15" height="11" rx="2.5" fill={PRIMARY} fillOpacity={GLASS} />
       <circle cx="7.5" cy="14.5" r="1.9" fill={LIGHT} stroke="none" />
       <path d="M11.5 14.5h3.5" stroke={LIGHT} />
+    </>
+  ),
+
+  // Receipt: a filled sheet with a rounded top and a torn, zig-zag bottom edge,
+  // carrying a dollar sign.
+  invoices: (
+    <>
+      <path
+        d="M5 20.5V5.5A2.5 2.5 0 0 1 7.5 3h9A2.5 2.5 0 0 1 19 5.5v15l-2.33-1.5-2.34 1.5L12 19l-2.33 1.5L7.33 19 5 20.5Z"
+        fill={PRIMARY}
+        fillOpacity={GLASS}
+      />
+      <path d="M14.1 8.4c-.35-.75-1.1-1.2-2.1-1.2-1.25 0-2.2.65-2.2 1.65 0 2.35 4.4 1.3 4.4 3.8 0 1.05-.95 1.8-2.2 1.8-1.05 0-1.9-.5-2.3-1.3" />
+      <path d="M12 5.8v1.4M12 14.45v1.3" />
     </>
   ),
 };

@@ -20,7 +20,7 @@ const ellipsis: CSSProperties = { minWidth: 0, overflow: "hidden", textOverflow:
 function avatar(stage: CrmStage): CSSProperties {
   return {
     borderRadius: "50%",
-    background: tint(stageColor(stage), 18),
+    background: tint(stageColor(stage), 12),
     color: stageColor(stage),
     display: "flex",
     alignItems: "center",
@@ -330,7 +330,7 @@ export function Crm({ store }: { store: Store }) {
                   setSel(id);
                 }
               }}
-              style={{ minHeight: 180, padding: 12, display: "flex", flexDirection: "column", minWidth: 0, boxShadow: `inset 0 2px 0 0 ${tint(stageColor(col.id), 70)}, inset 0 1px 0 rgba(255,255,255,0.06)` }}
+              style={{ minHeight: 180, padding: 12, display: "flex", flexDirection: "column", minWidth: 0, background: `linear-gradient(180deg, ${tint(stageColor(col.id), 7)}, transparent 120px), var(--color-card)`, boxShadow: `inset 0 2px 0 0 ${tint(stageColor(col.id), 70)}, var(--shadow-card)` }}
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
                 <span className="label" style={{ ...ellipsis, color: stageColor(col.id) }} title={col.hint}>{col.label}</span>
@@ -462,7 +462,7 @@ function LeadDetail({
               className="btn"
               title={s.hint}
               aria-pressed={on}
-              style={{ padding: "6px 10px", minHeight: 32, ...(on ? { background: stageColor(s.id), borderColor: stageColor(s.id), color: "var(--color-on-primary)" } : {}) }}
+              style={{ padding: "6px 10px", minHeight: 32, ...(on ? { background: tint(stageColor(s.id), 18), borderColor: stageColor(s.id), color: "var(--color-on-primary)" } : {}) }}
             >
               {s.label}
             </button>
