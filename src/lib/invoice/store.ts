@@ -15,7 +15,9 @@ import { deriveInvoice, round2, sumLines, type Invoice, type InvoiceDoc, type In
  *   invoices/<id>/doc-000001.json   one file per version (edits and voids add a version)
  *   invoices/<id>/pay-<pi>.json     one file per successful card payment
  *   invoices/<id>/pi-<pi>.json      PaymentIntents started for the invoice (for reuse / reconciliation)
- *   invoice-numbers/<n>.json        claim for invoice number DH-<n> (unique by construction)
+ *   invoice-numbers/<n>.json        claim for invoice number DH-<n> (unique by construction).
+ *                                   It holds no invoice id: these paths are sequential, and the
+ *                                   24-char id is the only secret guarding a public invoice link.
  * The current invoice = highest doc version + every payment file. Writing version N+1
  * with overwrite disabled doubles as optimistic locking: two concurrent edits cannot
  * both win.
@@ -105,14 +107,14 @@ export async function getInvoice(id: string): Promise<Invoice | null> {
   return (await getInvoiceWithIntents(id))?.invoice ?? null;
 }
 
-async function claimNumber(id: string): Promise<string> {
+async function claimNumber(): Promise<string> {
   const used = (await listObjects(NUMBERS_PREFIX))
     .map((o) => Number(/\/(\d+)\.json$/.exec(o.pathname)?.[1] ?? 0))
     .filter((n) => Number.isFinite(n) && n > 0);
   let n = Math.max(FIRST_NUMBER - 1, ...used) + 1;
   for (let attempt = 0; attempt < 25; attempt++, n++) {
     try {
-      await putObject(`${NUMBERS_PREFIX}${n}.json`, JSON.stringify({ id, claimedAt: new Date().toISOString() }), { contentType: "application/json" });
+      await putObject(`${NUMBERS_PREFIX}${n}.json`, JSON.stringify({ claimedAt: new Date().toISOString() }), { contentType: "application/json" });
       return `DH-${n}`;
     } catch (err) {
       if (!(err instanceof ObjectExistsError)) throw err;
@@ -130,7 +132,7 @@ function finalize(input: InvoiceInput): Omit<InvoiceInput, "lines"> & { lines: I
 
 export async function createInvoice(input: InvoiceInput): Promise<Invoice> {
   const id = randomId(24);
-  const number = await claimNumber(id);
+  const number = await claimNumber();
   const now = new Date().toISOString();
   const doc: InvoiceDoc = { ...finalize(input), id, number, version: 1, voided: false, createdAt: now, updatedAt: now };
   await putObject(docPath(id, 1), JSON.stringify(doc), { contentType: "application/json" });
