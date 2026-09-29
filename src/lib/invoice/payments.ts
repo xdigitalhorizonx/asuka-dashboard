@@ -9,12 +9,14 @@ import {
   firstChargeAt,
   fmtLongDate,
   MIN_CHARGE,
+  paymentPart,
   recurringGroups,
   round2,
   savesCard,
   subscriptionsDue,
   toCents,
   type Invoice,
+  type PaymentPart,
   type InvoiceLine,
   type InvoicePayment,
   type InvoiceSubscription,
@@ -103,12 +105,23 @@ function assertPayable(inv: Invoice) {
   if (inv.dueNow < MIN_CHARGE) throw new PayError("The balance is below the card minimum — please contact us to settle it.", 409);
 }
 
+/**
+ * The page says which part of a deposit invoice it shows. If that changed since it loaded (the
+ * deposit went through in another tab, or on a retry after a lost response) nothing is charged
+ * and the page reloads: a balance equal to the deposit would pass the amount check alone.
+ */
+function assertPart(inv: Invoice, expected: string) {
+  if (paymentPart(inv) !== expected) throw new PayError("This invoice changed while the page was open — please reload it and review again.", 409);
+}
+
 export interface CardQuote {
   base: number;
   fee: number;
   total: number;
   /** Percent actually applied (0 for debit/prepaid/unknown cards). */
   feePercent: number;
+  /** Deposit invoices: which payment this prices. */
+  part: PaymentPart;
   funding: string;
   brand: string;
   last4: string;
@@ -137,10 +150,11 @@ export function quoteFor(inv: Invoice, funding: string): Pick<CardQuote, "base" 
 }
 
 /** What this specific card would be charged — shown to the customer before they confirm. */
-export async function quoteCard(inv: Invoice, confirmationTokenId: string): Promise<CardQuote> {
+export async function quoteCard(inv: Invoice, confirmationTokenId: string, expectedPart = ""): Promise<CardQuote> {
   assertPayable(inv);
+  assertPart(inv, expectedPart);
   const card = await readCard(inv, confirmationTokenId);
-  return { ...quoteFor(inv, card.funding), ...card };
+  return { ...quoteFor(inv, card.funding), ...card, part: paymentPart(inv) };
 }
 
 export function paymentFromIntent(pi: Stripe.PaymentIntent, charge: Stripe.Charge | null): InvoicePayment {
@@ -195,7 +209,14 @@ async function refreshed(id: string): Promise<Invoice> {
 /** After a payment: start the subscriptions. A failure is logged and never fails the payment. */
 async function startSubscriptions(invoiceId: string, pi: Stripe.PaymentIntent, paidAt: string): Promise<void> {
   try {
-    await ensureSubscriptions(await refreshed(invoiceId), pi, paidAt);
+    const inv = await refreshed(invoiceId);
+    // A payment that saved no card (a deposit invoice's balance) can still start billing that
+    // failed earlier: on the card, and from the date, of the payment that did save one.
+    if (pi.setup_future_usage !== "off_session" && inv.payments.some((p) => p.customerId)) {
+      await retrySubscriptions(inv);
+      return;
+    }
+    await ensureSubscriptions(inv, pi, paidAt);
   } catch (err) {
     // The dashboard flags a paid invoice whose recurring lines have no subscription, and
     // its "Set up monthly billing" action retries this with the error shown.
@@ -423,22 +444,23 @@ function isStripeError(err: unknown): err is InstanceType<typeof Stripe.errors.S
  * `expectedTotalCents` is what the customer was shown; if the server's figure differs
  * (the invoice changed, a payment landed), nothing is charged and the page re-quotes.
  */
-export async function payInvoice(invoiceId: string, confirmationTokenId: string, expectedTotalCents: number, returnUrl: string): Promise<PayResult> {
+export async function payInvoice(invoiceId: string, confirmationTokenId: string, expectedTotalCents: number, returnUrl: string, expectedPart = ""): Promise<PayResult> {
   const found = await getInvoiceWithIntents(invoiceId);
   if (!found) throw new PayError("Invoice not found.", 404);
   const inv = await reconcileInvoice(found.invoice, found.pis);
   assertPayable(inv);
+  assertPart(inv, expectedPart);
 
   const card = await readCard(inv, confirmationTokenId);
   const q = quoteFor(inv, card.funding);
+  const part = paymentPart(inv);
   if (toCents(q.total) !== expectedTotalCents) {
-    throw new PayError("The amount due changed — please review the new total.", 409, { quote: { ...q, ...card } });
+    throw new PayError("The amount due changed — please review the new total.", 409, { quote: { ...q, ...card, part } });
   }
 
   const s = stripe();
   // Recurring lines: the card is saved to the client's Stripe customer for the subscription.
   const customer = savesCard(inv) ? await customerFor(inv, found.pis) : null;
-  const part = inv.deposit ? (inv.deposit.paidAt ? "balance" : "deposit") : "";
   const description = `Invoice ${inv.number}${part ? ` ${part}` : ""} · ${inv.client.name}`.slice(0, 1000);
   const receipt = inv.client.email ? { receipt_email: inv.client.email } : {};
   const metadata = {

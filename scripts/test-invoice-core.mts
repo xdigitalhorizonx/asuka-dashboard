@@ -374,6 +374,12 @@ await check("deposit: 50% of the one-time items + the first month now, the rest 
   assert.equal(types.depositSplit(lines, undefined, 100), null);
   assert.equal(types.depositWording({ percent: 50, later: 1200 }, lines), "50% deposit on the one-time items, plus the first month. The other $1,200.00 is due later.");
   assert.equal(types.depositWording({ percent: 50, later: 1200 }, lines.filter((l) => !l.recurring)), "50% deposit on the one-time items. The other $1,200.00 is due later.");
+  const freeMonth = lines.map((l) => (l.recurring ? { ...l, amount: 0 } : l));
+  assert.deepEqual(types.firstPeriods(freeMonth), [], "a free first month isn't billed now");
+  assert.equal(types.depositWording({ percent: 50, later: 1200 }, freeMonth), "50% deposit on the one-time items. The other $1,200.00 is due later.");
+  const yearly = lines.map((l) => (l.recurring ? { ...l, recurring: { interval: "year" as const, amount: 900 }, amount: 900 } : l));
+  assert.deepEqual(types.firstPeriods(yearly), ["year"]);
+  assert.match(types.depositWording({ percent: 50, later: 1200 }, yearly), /plus the first year\./);
 
   const v = (o: Record<string, unknown>) => validateInvoiceInput({ ...input, ...o });
   assert.equal(v({ depositPercent: 50 }).depositPercent, 50);
@@ -404,6 +410,8 @@ await check("deposit: the deposit saves the card and starts billing; the balance
   const open = types.deriveInvoice(doc, []);
   assert.equal(open.dueNow, 1294.99);
   assert.equal(open.balance, 2494.99);
+  assert.equal(types.paymentPart(open), "deposit");
+  assert.equal(types.paymentPart(types.deriveInvoice({ ...doc, depositPercent: undefined }, [])), "", "plain invoices have no part");
   assert.equal(savesCard(open), true, "the deposit saves the card");
   assert.equal(types.subscriptionsDue(open), false);
   assert.deepEqual(quoteFor(open, "credit"), { base: 1294.99, fee: 37.55, total: 1332.54, feePercent: 2.9 }, "fee on the deposit only");
@@ -414,6 +422,7 @@ await check("deposit: the deposit saves the card and starts billing; the balance
   assert.equal(half.deposit?.paidAt, dep.paidAt);
   assert.equal(half.dueNow, 1200);
   assert.equal(half.balance, 1200);
+  assert.equal(types.paymentPart(half), "balance", "the page must now show (and send) the balance");
   assert.equal(types.subscriptionsDue(half), true, "monthly billing starts with the deposit");
   assert.deepEqual(missingSubscriptions(half).map((g) => g.interval), ["month"]);
   assert.equal(savesCard(half), false, "the balance payment doesn't save the card again");

@@ -8,6 +8,7 @@ import type { InvoiceInput } from "@/lib/invoice/store";
 import {
   cardFee,
   depositSplit,
+  firstPeriods,
   fmtMoney,
   invoiceTotals,
   localYmd,
@@ -317,8 +318,13 @@ export function Invoices() {
   }
 
   async function act(inv: Invoice, action: "void" | "unvoid" | "delete" | "refresh") {
-    const subsNote = inv.subscriptions.length ? " Its Stripe subscription keeps billing — cancel that in Stripe." : "";
-    if (action === "void" && !window.confirm(`Void ${inv.number}? The link will show it as void and it can't be paid.${subsNote}`)) return;
+    // Voiding touches nothing in Stripe: say what keeps going (a deposit invoice can be voided after its deposit).
+    const stripeNote = [
+      inv.paid > 0 ? ` The ${fmtMoney(inv.paid)} already paid isn't refunded.` : "",
+      inv.subscriptions.length ? " Its subscription keeps billing." : "",
+      inv.paid > 0 || inv.subscriptions.length ? " Do those in Stripe." : "",
+    ].join("");
+    if (action === "void" && !window.confirm(`Void ${inv.number}? The link will show it as void and it can't be paid.${stripeNote}`)) return;
     if (action === "delete" && !window.confirm(`Delete ${inv.number} for good? Its link stops working.`)) return;
     setBusy(`${action}:${inv.id}`);
     const r =
@@ -775,6 +781,7 @@ function DraftEditor({
   const sums = draftSums(draft);
   const total = sums.total;
   const split = depositSplit(draftLines(draft), draftDiscount(draft), draft.depositPercent);
+  const firsts = firstPeriods(draftLines(draft));
   // The card fee on the first payment: the deposit when there is one.
   const today = split ? split.now : total;
   const fee = cardFee(today, Math.min(draft.cardFeePercent, feeMax));
@@ -1023,7 +1030,7 @@ function DraftEditor({
             {!draft.depositPercent
               ? "Half the one-time items now, the rest later"
               : split
-                ? `Now ${fmtMoney(split.now)}${repeats.length ? " (incl. first month)" : ""} · later ${fmtMoney(split.later)}`
+                ? `Now ${fmtMoney(split.now)}${firsts.length ? ` (incl. first ${firsts.join(" and ")})` : ""} · later ${fmtMoney(split.later)}`
                 : "No one-time items to split"}
           </span>
         </div>

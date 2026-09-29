@@ -203,10 +203,21 @@ export function depositSplit(
   return { now: round2(total - later), later };
 }
 
+/** The repeating intervals whose first period is billed on this invoice (a free first month isn't). */
+export function firstPeriods(lines: Pick<InvoiceLine, "amount" | "recurring">[]): RecurringInterval[] {
+  return (["month", "year"] as const).filter((i) => sumLines(lines.filter((l) => recurs(l) && l.recurring?.interval === i)) > 0);
+}
+
 /** "50% deposit on the one-time items, plus the first month. The other $1,200.00 is due later." */
 export function depositWording(d: Pick<InvoiceDeposit, "percent" | "later">, lines: InvoiceLine[]): string {
-  const firsts = recurringGroups(lines).map((g) => `first ${g.interval}`);
+  const firsts = firstPeriods(lines).map((i) => `first ${i}`);
   return `${round2(d.percent)}% deposit on the one-time items${firsts.length ? `, plus the ${firsts.join(" and ")}` : ""}. The other ${fmtMoney(d.later)} is due later.`;
+}
+
+/** Which payment a deposit invoice is waiting for: its deposit, then the balance. "" for other invoices. */
+export type PaymentPart = "deposit" | "balance" | "";
+export function paymentPart(inv: Pick<Invoice, "deposit">): PaymentPart {
+  return inv.deposit ? (inv.deposit.paidAt ? "balance" : "deposit") : "";
 }
 
 /** "Discount (10%)" or "Discount". */

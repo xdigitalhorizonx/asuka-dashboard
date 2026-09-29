@@ -12,7 +12,8 @@
  * 3. BASE=http://localhost:3000 E2E_PASSWORD=<pw> E2E_STRIPE_SK=sk_test_… E2E_WHSEC=<same whsec> \
  *    E2E_FEE_RULE=none|credit29|all3 node scripts/e2e-invoices.mjs      (E2E_ONLY=B,F runs a subset)
  *    (E2E_FEE_RULE must match the fee env: unset → none, 2.9 → credit29, 3 + INVOICE_CARD_FEE_CARDS=all → all3.)
- * The public pay route allows 12 attempts per IP per 10 minutes; restart the dev server between runs.
+ * The public pay route allows 12 attempts per IP per 10 minutes; restart the dev server between runs
+ * (the full suite needs 14: run E2E_ONLY=A,B,C,D,E,K, restart, then E2E_ONLY=L,M,F,G,H,J,I).
  */
 import { chromium } from "playwright";
 import crypto from "node:crypto";
@@ -141,7 +142,14 @@ async function complete3ds(page) {
 async function review(page, card) {
   await fillCard(page, card);
   await page.getByRole("button", { name: "Review payment" }).click();
-  await page.getByText("Total today").waitFor({ timeout: 45_000 });
+  try {
+    await page.getByText("Total today").waitFor({ timeout: 45_000 });
+  } catch {
+    // Say what the pay box showed instead (a card-form error, a refusal) and keep a screenshot.
+    const box = (await page.locator("#pay").innerText().catch(() => "")).replace(/\s+/g, " ").slice(0, 300);
+    await page.screenshot({ path: path.join(OUT, `review-timeout-${Date.now()}.png`), fullPage: true }).catch(() => {});
+    throw new Error(`the review step never showed a total; pay box: ${box}`);
+  }
   return page.locator('[aria-live="polite"]').filter({ hasText: "Total today" }).innerText();
 }
 async function openPage(browser, url, opts = {}) {
@@ -379,6 +387,32 @@ await scenario("L · 50% deposit → deposit (+ fee) saves the card and starts t
   const all = await stripe("subscriptions", { customer: pi1.customer, status: "all", limit: "100" });
   must(all.data.filter((s) => s.metadata.invoice_id === inv.id).length === 1, "a second subscription appeared in Stripe");
   return `renewal note “${renewal}” · deposit ${p1.amount} (fee ${p1.fee}) · sub $94.99/mo in ${days.toFixed(1)} days · balance ${p2.amount} (fee ${p2.fee}) · ${wh}`;
+});
+
+await scenario("M · two tabs at a deposit with equal halves → the stale tab's Pay is refused and reloads; the balance isn't charged", async () => {
+  // No monthly lines: the balance costs exactly what the deposit did, so only the part check can tell them apart.
+  const inv = await createInvoice("E2E M", [oneTime("l1", "Website build", 2400)], { depositPercent: 50 });
+  must(inv.deposit?.now === 1200 && inv.deposit?.later === 1200, `split ${JSON.stringify(inv.deposit)}`);
+  const a = await openPage(browser, `${BASE}/i/${inv.id}`);
+  const b = await openPage(browser, `${BASE}/i/${inv.id}`);
+  await review(b.page, "4242424242424242"); // tab B reviews the deposit…
+  await review(a.page, "4242424242424242");
+  await a.page.getByRole("button", { name: /^Pay \$/ }).click(); // …tab A pays it
+  await a.page.getByText("Payment received").waitFor({ timeout: 60_000 });
+  await a.ctx.close();
+  await b.page.getByRole("button", { name: /^Pay \$/ }).click(); // B still says "Deposit"
+  const alert = b.page.getByRole("alert").filter({ hasText: /changed|reload/i }).first();
+  await alert.waitFor({ timeout: 45_000 });
+  const msg = (await alert.innerText()).trim();
+  await b.page.getByText("Remaining balance").waitFor({ timeout: 30_000 }); // reloaded to the balance
+  await b.page.screenshot({ path: path.join(OUT, "M-stale-tab.png"), fullPage: true });
+  await b.ctx.close();
+  const now = await getInvoice(inv.id);
+  must(now.payments.length === 1 && now.payments[0].part === "deposit" && now.balance === 1200, `after tab B: ${now.payments.length} payments, balance ${now.balance}`);
+  const pis = await stripe("payment_intents", { limit: "30" });
+  const charged = pis.data.filter((x) => x.metadata.invoice_id === inv.id && x.status === "succeeded");
+  must(charged.length === 1, `${charged.length} succeeded charges in Stripe for this invoice`);
+  return `stale tab refused: “${msg}” · 1 charge (${now.payments[0].amount}) · ${now.balance} still due`;
 });
 
 await scenario("F · declined card → honest error, retry with 4242 succeeds on the same PaymentIntent", async () => {

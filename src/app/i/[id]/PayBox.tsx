@@ -7,7 +7,7 @@ import { DhMark } from "@/components/DhLogo";
 import { cardFeeWording } from "@/lib/invoice/types";
 import s from "../invoice.module.css";
 
-type Quote = { base: number; fee: number; total: number; feePercent: number; funding: string; brand: string; last4: string };
+type Quote = { base: number; fee: number; total: number; feePercent: number; funding: string; brand: string; last4: string; part?: "deposit" | "balance" | "" };
 type Phase = "loading" | "entering" | "reviewing" | "paying" | "done" | "processing" | "unavailable";
 
 const money = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -186,7 +186,8 @@ export function PayBox(props: {
       setPhase("entering");
       return;
     }
-    const r = await post<{ quote: Quote }>(`${api}/quote`, { confirmationTokenId: confirmationToken.id });
+    // `part`: the server refuses (409 → reload) if the deposit/balance shown here is stale.
+    const r = await post<{ quote: Quote }>(`${api}/quote`, { confirmationTokenId: confirmationToken.id, part: part ?? "" });
     if (!r.ok) {
       setError(r.data.error || "This card couldn't be priced. Please try again.");
       setPhase("entering");
@@ -206,6 +207,7 @@ export function PayBox(props: {
     const r = await post<{ status: string; clientSecret?: string; paymentIntentId?: string; message?: string; quote?: Quote }>(`${api}/pay`, {
       confirmationTokenId: tokenId,
       expectedTotalCents: cents(quote.total),
+      part: part ?? "",
     });
     if (!r.ok) {
       if (r.status === 409 && r.data.quote) {
@@ -322,7 +324,7 @@ export function PayBox(props: {
                   {brandLabel(quote.brand)} {quote.funding !== "unknown" ? quote.funding : ""} ••{quote.last4}
                 </div>
                 <div className={s.reviewRow}>
-                  <span>{part === "deposit" ? "Deposit · invoice" : part === "balance" ? "Balance · invoice" : "Invoice"} {props.number}</span>
+                  <span>{quote.part === "deposit" ? "Deposit · invoice" : quote.part === "balance" ? "Balance · invoice" : "Invoice"} {props.number}</span>
                   <span>{money(quote.base)}</span>
                 </div>
                 {quote.fee > 0 ? (

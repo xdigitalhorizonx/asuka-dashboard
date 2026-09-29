@@ -28,6 +28,7 @@ import {
   cardFee,
   cardFeeWording,
   discountLabel,
+  firstPeriods,
   fmtLongDate,
   fmtMoney,
   invoiceTotals,
@@ -905,7 +906,7 @@ class InvoiceLayout {
     const fees = round2((inv.payments ?? []).reduce((sum, p) => sum + (Number(p.fee) || 0), 0));
     // A deposit invoice before its deposit: the band is the deposit, the rest is listed above it.
     const depositOwed = inv.status === "open" && !!inv.deposit && !inv.deposit.paidAt;
-    const firsts = recurringGroups(inv.lines ?? []).map((g) => `first ${g.interval}`);
+    const firsts = firstPeriods(inv.lines ?? []).map((i) => `first ${i}`);
     const notes = [
       ...(depositOwed && inv.deposit
         ? wrap(`Deposit: ${round2(inv.deposit.percent)}% of one-time items${firsts.map((f) => ` + ${f}`).join("")}`, s.fineNote, noteW)
