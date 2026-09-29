@@ -142,7 +142,7 @@ function chargeMemo(ch: StripeCharge): string {
 export type ChargeResult = "added" | "updated" | "removed" | "unchanged" | "ignored" | "skipped";
 
 /** The memo `addInvoiceTransaction` writes for an invoice payment. */
-const INVOICE_MEMO = /^Invoice DH-[\w-]+(?: · incl\. \$[\d,]+\.\d\d card fee)?/;
+const INVOICE_MEMO = /^Invoice DH-[\w-]+(?: deposit| balance)?(?: · incl\. \$[\d,]+\.\d\d card fee)?/;
 
 /**
  * Apply one Stripe charge to the customers list. Idempotent: the same charge id

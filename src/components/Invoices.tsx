@@ -5,7 +5,20 @@ import { tint, localToday } from "@/lib/crm";
 import { haptic } from "@/lib/haptics";
 import type { PaymentsStatus } from "@/lib/invoice/payments";
 import type { InvoiceInput } from "@/lib/invoice/store";
-import { cardFee, fmtMoney, invoiceTotals, localYmd, recurringGroups, round2, type Invoice, type InvoiceDiscount, type InvoiceLine, type RecurringInterval } from "@/lib/invoice/types";
+import {
+  cardFee,
+  depositSplit,
+  fmtMoney,
+  invoiceTotals,
+  localYmd,
+  recurringGroups,
+  round2,
+  subscriptionsDue,
+  type Invoice,
+  type InvoiceDiscount,
+  type InvoiceLine,
+  type RecurringInterval,
+} from "@/lib/invoice/types";
 import { Icon } from "./icons";
 
 /**
@@ -35,9 +48,9 @@ type EditLine = InvoiceLine & { amountText: string; recurringText: string };
 type Draft = Omit<InvoiceInput, "lines" | "discount"> & { lines: EditLine[]; discountText: string; discountKind: InvoiceDiscount["kind"] };
 const PER: Record<RecurringInterval, string> = { month: "mo", year: "yr" };
 
-/** Paid, has recurring lines, but not every interval has its subscription yet. */
+/** Paid (or its deposit is), has recurring lines, but not every interval has its subscription yet. */
 function missingSubs(inv: Invoice): boolean {
-  return inv.status === "paid" && recurringGroups(inv.lines).some((g) => !inv.subscriptions.some((s) => s.interval === g.interval));
+  return subscriptionsDue(inv) && recurringGroups(inv.lines).some((g) => !inv.subscriptions.some((s) => s.interval === g.interval));
 }
 function stripeSubUrl(id: string, live?: boolean): string {
   return `https://dashboard.stripe.com/${live ? "" : "test/"}subscriptions/${id}`;
@@ -63,10 +76,16 @@ function draftDiscount(d: Draft): InvoiceDiscount | undefined {
   const v = parseAmount(d.discountText.replace(/%/g, ""));
   return Number.isFinite(v) && v > 0 ? { kind: d.discountKind, value: v } : undefined;
 }
+/** The draft's lines as the server will read them (amounts + repeat prices). */
+function draftLines(d: Draft) {
+  return d.lines.map((l) => ({
+    amount: Number.isFinite(parseAmount(l.amountText)) ? parseAmount(l.amountText) : 0,
+    recurring: l.recurring ? { interval: l.recurring.interval, amount: parseAmount(l.recurringText) || 0 } : null,
+  }));
+}
 /** The draft's line sum, discount in dollars, and total — the same math the server saves. */
 function draftSums(d: Draft) {
-  const lines = d.lines.map((l) => ({ amount: Number.isFinite(parseAmount(l.amountText)) ? parseAmount(l.amountText) : 0 }));
-  return invoiceTotals(lines, draftDiscount(d));
+  return invoiceTotals(draftLines(d), draftDiscount(d));
 }
 /** Keep the proposal-style line note ("First month · then $94.99/mo") in step with the repeat price. */
 function syncNote(l: EditLine, interval: RecurringInterval | null, priceText: string): string {
@@ -103,6 +122,8 @@ function fmtShortDate(ymd: string): string {
 function statusView(inv: Invoice): { label: string; color: string } {
   if (inv.status === "paid") return { label: "Paid", color: "var(--color-green)" };
   if (inv.status === "void") return { label: "Void", color: "var(--color-muted)" };
+  // The due date was for the deposit; the rest is "due later".
+  if (inv.deposit?.paidAt) return { label: "Deposit paid", color: "var(--color-teal)" };
   if (inv.dueDate && inv.dueDate < localToday()) return { label: "Overdue", color: "var(--color-amber)" };
   return { label: "Open", color: "var(--color-sky)" };
 }
@@ -220,7 +241,7 @@ export function Invoices() {
     setParseInfo(null);
     setFormError(null);
     setEditing(inv);
-    const { issueDate, dueDate, client, project, lines, cardFeePercent, notes, source, discount } = inv;
+    const { issueDate, dueDate, client, project, lines, cardFeePercent, notes, source, discount, depositPercent } = inv;
     setDraft({
       issueDate,
       dueDate,
@@ -230,6 +251,7 @@ export function Invoices() {
       cardFeePercent: Math.min(cardFeePercent, feeMax),
       notes,
       ...(source ? { source } : {}),
+      ...(depositPercent ? { depositPercent } : {}),
       discountText: discount ? String(discount.value) : "",
       discountKind: discount?.kind ?? "percent",
     });
@@ -295,7 +317,8 @@ export function Invoices() {
   }
 
   async function act(inv: Invoice, action: "void" | "unvoid" | "delete" | "refresh") {
-    if (action === "void" && !window.confirm(`Void ${inv.number}? The link will show it as void and it can't be paid.`)) return;
+    const subsNote = inv.subscriptions.length ? " Its Stripe subscription keeps billing — cancel that in Stripe." : "";
+    if (action === "void" && !window.confirm(`Void ${inv.number}? The link will show it as void and it can't be paid.${subsNote}`)) return;
     if (action === "delete" && !window.confirm(`Delete ${inv.number} for good? Its link stops working.`)) return;
     setBusy(`${action}:${inv.id}`);
     const r =
@@ -341,7 +364,12 @@ export function Invoices() {
   function mailto(inv: Invoice): string {
     const first = inv.client.name.split(/\s+/)[0] || "there";
     const subject = `Invoice ${inv.number} from Digital Horizon`;
-    const body = `Hi ${first},\n\nHere's your invoice ${inv.number} for ${fmtMoney(inv.balance)}. You can view it, save a PDF, and pay by card here:\n\n${linkFor(inv)}\n\nThank you!\nDigital Horizon`;
+    const what = !inv.deposit
+      ? `your invoice ${inv.number} for ${fmtMoney(inv.balance)}`
+      : inv.deposit.paidAt
+        ? `the remaining balance on invoice ${inv.number}: ${fmtMoney(inv.balance)}`
+        : `your invoice ${inv.number} for ${fmtMoney(inv.total)} — the ${inv.deposit.percent}% deposit due now is ${fmtMoney(inv.dueNow)}`;
+    const body = `Hi ${first},\n\nHere's ${what}. You can view it, save a PDF, and pay by card here:\n\n${linkFor(inv)}\n\nThank you!\nDigital Horizon`;
     return `mailto:${encodeURIComponent(inv.client.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   }
 
@@ -469,6 +497,7 @@ export function Invoices() {
         <section className="card" style={{ padding: 18, display: "grid", gap: 10, borderColor: tint("var(--color-green)", 45), background: tint("var(--color-green)", 6) }} aria-live="polite">
           <h2 className="card-title" style={{ margin: 0 }}>
             {created.number} is live{created.client.name ? ` for ${created.client.name}` : ""} · {fmtMoney(created.balance)}
+            {created.deposit ? ` · ${fmtMoney(created.dueNow)} deposit due now` : ""}
           </h2>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <input className="input" readOnly value={linkFor(created)} onFocus={(e) => e.currentTarget.select()} aria-label="Invoice link" style={{ flex: "1 1 320px", fontSize: 14 }} />
@@ -551,9 +580,15 @@ export function Invoices() {
                     <span className="only-sm">
                       {inv.number} · <span style={{ color: st.color, fontWeight: 600 }}>{st.label}</span> ·{" "}
                     </span>
-                    {inv.status === "paid" && inv.paidAt ? `Paid ${fmtShortDate(localYmd(inv.paidAt))}` : inv.status === "open" ? (inv.dueDate ? `Due ${fmtShortDate(inv.dueDate)}` : "Due on receipt") : "Voided"}
+                    {inv.status === "paid" && inv.paidAt
+                      ? `Paid ${fmtShortDate(localYmd(inv.paidAt))}`
+                      : inv.status === "open" && inv.deposit?.paidAt
+                        ? `Deposit paid ${fmtShortDate(localYmd(inv.deposit.paidAt))}`
+                        : inv.status === "open"
+                          ? `${inv.dueDate ? `Due ${fmtShortDate(inv.dueDate)}` : "Due on receipt"}${inv.deposit ? ` · ${inv.deposit.percent}% deposit` : ""}`
+                          : "Voided"}
                     {inv.subscriptions.map((s) => ` · ${fmtMoney(s.amount)}/${PER[s.interval]} from ${fmtShortDate(localYmd(s.startsAt))}`).join("")}
-                    {inv.status === "open" && recurringGroups(inv.lines).map((g) => ` · then ${fmtMoney(g.amount)}/${PER[g.interval]}`).join("")}
+                    {inv.status === "open" && !inv.subscriptions.length && recurringGroups(inv.lines).map((g) => ` · then ${fmtMoney(g.amount)}/${PER[g.interval]}`).join("")}
                   </span>
                   {missingSubs(inv) && (
                     <span style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--color-amber)" }}>⚠ Monthly billing not set up — use More → Set up monthly billing</span>
@@ -564,7 +599,11 @@ export function Invoices() {
                 </span>
                 <span className="money" style={{ fontWeight: 600 }}>
                   {fmtMoney(inv.total)}
-                  {inv.status === "open" && inv.paid > 0 && <span style={{ display: "block", fontSize: 12, fontWeight: 400, color: "var(--color-muted)" }}>{fmtMoney(inv.balance)} due</span>}
+                  {inv.status === "open" && (inv.paid > 0 || inv.dueNow < inv.balance) && (
+                    <span style={{ display: "block", fontSize: 12, fontWeight: 400, color: "var(--color-muted)" }}>
+                      {inv.dueNow < inv.balance ? `${fmtMoney(inv.dueNow)} now` : `${fmtMoney(inv.balance)} due`}
+                    </span>
+                  )}
                 </span>
                 <span className="hide-sm" style={{ paddingLeft: 10 }}>
                   <span className="label" style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 8px", borderRadius: 999, color: st.color, background: tint(st.color, 12) }}>
@@ -735,7 +774,10 @@ function DraftEditor({
 }) {
   const sums = draftSums(draft);
   const total = sums.total;
-  const fee = cardFee(total, Math.min(draft.cardFeePercent, feeMax));
+  const split = depositSplit(draftLines(draft), draftDiscount(draft), draft.depositPercent);
+  // The card fee on the first payment: the deposit when there is one.
+  const today = split ? split.now : total;
+  const fee = cardFee(today, Math.min(draft.cardFeePercent, feeMax));
   const repeats = recurringGroups(draft.lines.map((l) => ({ ...l, recurring: l.recurring ? { interval: l.recurring.interval, amount: parseAmount(l.recurringText) || 0 } : null })));
   const set = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
   const setClient = (k: keyof Draft["client"], v: string) => set({ client: { ...draft.client, [k]: v } });
@@ -966,7 +1008,27 @@ function DraftEditor({
             </span>
           </span>
         </label>
-        <div style={{ textAlign: "right" }}>
+        <div style={{ display: "grid", gap: 4 }} className="draft-deposit">
+          <span className="label">Payment</span>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 40, fontSize: 14, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={!!draft.depositPercent}
+              onChange={(e) => set({ depositPercent: e.target.checked ? 50 : undefined })}
+              style={{ width: 18, height: 18, margin: 0, accentColor: HUE }}
+            />
+            50% deposit
+          </label>
+          <span style={{ fontSize: 12, color: draft.depositPercent && !split ? "var(--color-amber)" : "var(--color-muted)", maxWidth: 260 }}>
+            {!draft.depositPercent
+              ? "Half the one-time items now, the rest later"
+              : split
+                ? `Now ${fmtMoney(split.now)}${repeats.length ? " (incl. first month)" : ""} · later ${fmtMoney(split.later)}`
+                : "No one-time items to split"}
+          </span>
+        </div>
+        {/* marginLeft auto: stays on the right when the row wraps */}
+        <div style={{ textAlign: "right", marginLeft: "auto" }}>
           <div className="label">Invoice total</div>
           <div className="total" style={{ color: HUE }}>
             {fmtMoney(total)}
@@ -976,14 +1038,20 @@ function DraftEditor({
               {fmtMoney(sums.subtotal)} − {fmtMoney(sums.discount)} discount
             </div>
           )}
+          {split && (
+            <div style={{ fontSize: 13, color: "var(--color-muted)" }}>
+              {fmtMoney(split.now)} deposit now · {fmtMoney(split.later)} later
+            </div>
+          )}
           {fee > 0 && (
             <div style={{ fontSize: 13, color: "var(--color-muted)" }}>
-              {feeAllCards ? "By card" : "Credit card"}: {fmtMoney(total + fee)} (incl. {fmtMoney(fee)} card fee)
+              {feeAllCards ? "By card" : "Credit card"}
+              {split ? " today" : ""}: {fmtMoney(today + fee)} (incl. {fmtMoney(fee)} card fee)
             </div>
           )}
           {repeats.length > 0 && (
             <div style={{ fontSize: 13, color: "var(--color-muted)", maxWidth: 320, marginLeft: "auto" }}>
-              Then {repeats.map((g) => `${fmtMoney(g.amount)}/${PER[g.interval]}`).join(" + ")} — a Stripe subscription on the client&rsquo;s card starts when they pay.
+              Then {repeats.map((g) => `${fmtMoney(g.amount)}/${PER[g.interval]}`).join(" + ")} — a Stripe subscription on the client&rsquo;s card starts when they pay{split ? " the deposit" : ""}.
             </div>
           )}
           {repeats.length > 0 && !draft.client.email.trim() && (

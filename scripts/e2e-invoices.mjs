@@ -10,8 +10,8 @@
  * 2. Playwright isn't a dependency: `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm i --no-save playwright`
  *    (uses your installed Chrome; set PW_CHROMIUM to its path if it isn't the Windows default).
  * 3. BASE=http://localhost:3000 E2E_PASSWORD=<pw> E2E_STRIPE_SK=sk_test_… E2E_WHSEC=<same whsec> \
- *    E2E_FEE_RULE=none|credit29 node scripts/e2e-invoices.mjs      (E2E_ONLY=B,F runs a subset)
- *    (E2E_FEE_RULE must match INVOICE_CARD_FEE_PERCENT: unset → none, 2.9 → credit29.)
+ *    E2E_FEE_RULE=none|credit29|all3 node scripts/e2e-invoices.mjs      (E2E_ONLY=B,F runs a subset)
+ *    (E2E_FEE_RULE must match the fee env: unset → none, 2.9 → credit29, 3 + INVOICE_CARD_FEE_CARDS=all → all3.)
  * The public pay route allows 12 attempts per IP per 10 minutes; restart the dev server between runs.
  */
 import { chromium } from "playwright";
@@ -317,6 +317,68 @@ await scenario("K · 10% discount → the page shows it, the card pays the disco
   const pdf = await fetch(`${BASE}/api/public/invoices/${inv.id}/pdf`);
   must(pdf.ok && (pdf.headers.get("content-type") || "").includes("pdf"), "PDF didn't render");
   return `charged ${p.amount} (fee ${p.fee}) on ${inv.total} after 10% off · subscription still $94.99/mo · ${await verifyWebhookAndCustomers("K", inv, p, pi)}`;
+});
+
+await scenario("L · 50% deposit → deposit (+ fee) saves the card and starts the subscription; balance later on the same link, no second subscription", async () => {
+  const inv = await createInvoice("E2E L", [oneTime("l1", "Website build", 2000), monthly("l2", "Hosting", 94.99)], { depositPercent: 50 });
+  must(inv.deposit?.now === 1094.99 && inv.deposit?.later === 1000 && inv.dueNow === 1094.99, `split ${JSON.stringify(inv.deposit)} · due now ${inv.dueNow}`);
+
+  // 1) The deposit, by credit card.
+  let { ctx, page } = await openPage(browser, `${BASE}/i/${inv.id}`);
+  const text = await page.locator("main").innerText();
+  must(/Deposit due now/.test(text) && /Balance due later\s*\$1,000\.00/.test(text), "deposit rows missing on the page");
+  must(/50% deposit on the one-time items, plus the first month\. The other \$1,000\.00 is due later\./.test(text), "deposit explanation missing");
+  const renewal = await page.getByTestId("renewal-note").innerText();
+  const rv = await review(page, "4242424242424242");
+  must(/Deposit · invoice/.test(rv), `review row: ${rv.replace(/\s+/g, " ")}`);
+  await page.getByRole("button", { name: /^Pay \$/ }).click();
+  await page.getByText("Payment received").waitFor({ timeout: 60_000 });
+  await page.waitForTimeout(2500); // let the refresh land: the note must survive it
+  const done = (await page.locator('[role="status"]').filter({ hasText: "Payment received" }).innerText()).replace(/\s+/g, " ");
+  must(/The remaining \$1,000\.00 is due later/.test(done) && /Your card is saved for \$94\.99\/month/.test(done), `success note: ${done}`);
+  await page.screenshot({ path: path.join(OUT, "L-deposit-done.png"), fullPage: true });
+  await ctx.close();
+
+  let now = await getInvoice(inv.id);
+  must(now.status === "open" && now.payments.length === 1 && now.deposit?.paidAt && now.balance === 1000 && now.dueNow === 1000, `after deposit: ${now.status}, balance ${now.balance}, due now ${now.dueNow}`);
+  const p1 = now.payments[0];
+  const fee1 = expectedFee(1094.99, "credit");
+  must(p1.part === "deposit" && p1.fee === fee1 && round2(p1.amount) === round2(1094.99 + fee1), `deposit charged ${p1.amount} (fee ${p1.fee}, part ${p1.part})`);
+  const pi1 = await stripe(`payment_intents/${p1.paymentIntentId}`);
+  must(pi1.setup_future_usage === "off_session" && pi1.customer && pi1.metadata.invoice_part === "deposit", `deposit PI sfu=${pi1.setup_future_usage} part=${pi1.metadata.invoice_part}`);
+  must(now.subscriptions.length === 1, `${now.subscriptions.length} subscriptions after the deposit`);
+  const sub = await stripe(`subscriptions/${now.subscriptions[0].subscriptionId}`);
+  const days = (sub.billing_cycle_anchor * 1000 - Date.now()) / 86_400_000;
+  must(sub.status === "active" && days > 27 && days < 32, `subscription ${sub.status}, first renewal in ${days.toFixed(1)} days`);
+  must(sub.items.data.reduce((s, it) => s + it.price.unit_amount * it.quantity, 0) === 9499, "subscription isn't $94.99/mo");
+  must(sub.default_payment_method === pi1.payment_method, "subscription card ≠ deposit card");
+  const wh = await verifyWebhookAndCustomers("L", inv, p1, pi1);
+
+  // 2) The balance, by debit card, from the same link.
+  ({ ctx, page } = await openPage(browser, `${BASE}/i/${inv.id}`));
+  const t2 = await page.locator("main").innerText();
+  must(/Deposit paid/.test(t2) && /Balance due\s*\$1,000\.00/.test(t2), "balance page");
+  must((await page.getByTestId("renewal-note").count()) === 0, "the balance pay box still talks about renewals");
+  const rv2 = await review(page, "4000056655665556");
+  must(/Balance · invoice/.test(rv2), `balance review row: ${rv2.replace(/\s+/g, " ")}`);
+  await page.getByRole("button", { name: /^Pay \$/ }).click();
+  await page.getByText(/Payment received|Paid in full/).first().waitFor({ timeout: 60_000 });
+  await ctx.close();
+
+  now = await getInvoice(inv.id);
+  must(now.status === "paid" && now.payments.length === 2, `after balance: ${now.status}, ${now.payments.length} payments`);
+  const p2 = now.payments.find((p) => p.part === "balance");
+  const fee2 = expectedFee(1000, "debit");
+  must(p2 && p2.fee === fee2 && round2(p2.amount) === round2(1000 + fee2), `balance charged ${p2?.amount} (fee ${p2?.fee})`);
+  const pi2 = await stripe(`payment_intents/${p2.paymentIntentId}`);
+  must(!pi2.setup_future_usage && pi2.metadata.invoice_part === "balance", `balance PI sfu=${pi2.setup_future_usage} part=${pi2.metadata.invoice_part}`);
+  const ev2 = await eventFor("charge.succeeded", (o) => o.payment_intent === pi2.id);
+  must((await deliver(ev2)).status === 200, "balance webhook");
+  const fin = await getInvoice(inv.id);
+  must(fin.payments.length === 2 && fin.subscriptions.length === 1, `after balance webhook: ${fin.payments.length} payments, ${fin.subscriptions.length} subs`);
+  const all = await stripe("subscriptions", { customer: pi1.customer, status: "all", limit: "100" });
+  must(all.data.filter((s) => s.metadata.invoice_id === inv.id).length === 1, "a second subscription appeared in Stripe");
+  return `renewal note “${renewal}” · deposit ${p1.amount} (fee ${p1.fee}) · sub $94.99/mo in ${days.toFixed(1)} days · balance ${p2.amount} (fee ${p2.fee}) · ${wh}`;
 });
 
 await scenario("F · declined card → honest error, retry with 4242 succeeds on the same PaymentIntent", async () => {

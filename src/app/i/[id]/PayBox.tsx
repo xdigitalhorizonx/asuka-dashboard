@@ -58,7 +58,12 @@ async function post<T>(url: string, body: unknown): Promise<{ ok: boolean; statu
 export function PayBox(props: {
   invoiceId: string;
   number: string;
+  /** What this payment covers (before any card fee): the balance, or a deposit invoice's deposit. */
   balance: number;
+  /** Deposit invoices: which of the two payments this is. */
+  part: "deposit" | "balance" | null;
+  /** Deposit invoices, before the deposit: what's left for the second payment. */
+  later: number;
   cardFeePercent: number;
   /** Every card pays the fee (debit too), not just credit cards. */
   cardFeeAllCards: boolean;
@@ -70,7 +75,7 @@ export function PayBox(props: {
   /** Recurring lines billed by a subscription after today; non-empty → the card is saved. */
   recurring: Recurring[];
 }) {
-  const { invoiceId, balance, cardFeePercent, cardFeeAllCards, publishableKey, testMode, email, name, contactEmail, recurring } = props;
+  const { invoiceId, balance, part, later, cardFeePercent, cardFeeAllCards, publishableKey, testMode, email, name, contactEmail, recurring } = props;
   const saveCard = recurring.length > 0;
   const router = useRouter();
   const mountRef = useRef<HTMLDivElement>(null);
@@ -81,7 +86,11 @@ export function PayBox(props: {
   const [error, setError] = useState<string | null>(null);
   const [quote, setQuote] = useState<Quote | null>(null);
   const [tokenId, setTokenId] = useState<string | null>(null);
-  const [paidTotal, setPaidTotal] = useState<number | null>(null);
+  /**
+   * What the success note says, fixed when the payment goes through: the page refreshes right
+   * after, and a deposit invoice then re-renders this box for the balance (no renewal, no "later").
+   */
+  const [receipt, setReceipt] = useState<{ total: number; saved: string; later: number } | null>(null);
   const api = `/api/public/invoices/${invoiceId}`;
 
   const finish = useCallback(
@@ -215,7 +224,7 @@ export function PayBox(props: {
     }
     const d = r.data;
     if (d.status === "succeeded") {
-      setPaidTotal(quote.total);
+      setReceipt({ total: quote.total, saved: saveCard ? recurringText(recurring) : "", later });
       setPhase("done");
       router.refresh();
       return;
@@ -233,7 +242,7 @@ export function PayBox(props: {
         setPhase("entering");
         return;
       }
-      setPaidTotal(quote.total);
+      setReceipt({ total: quote.total, saved: saveCard ? recurringText(recurring) : "", later });
       await finish(d.paymentIntentId);
       return;
     }
@@ -269,11 +278,16 @@ export function PayBox(props: {
             <div className={s.successMark}>✓</div>
             <p style={{ fontSize: 18, fontWeight: 800, margin: 0 }}>Payment received</p>
             <p className={s.payHint} style={{ margin: "6px 0 0" }}>
-              {paidTotal !== null ? `${money(paidTotal)} paid. ` : ""}Thank you! A receipt is on its way{email ? ` to ${email}` : ""}.
+              {receipt ? `${money(receipt.total)} paid. ` : ""}Thank you! A receipt is on its way{email ? ` to ${email}` : ""}.
             </p>
-            {saveCard && (
+            {receipt?.saved && (
               <p className={s.payHint} style={{ margin: "6px 0 0" }}>
-                Your card is saved for {recurringText(recurring)}.
+                Your card is saved for {receipt.saved}.
+              </p>
+            )}
+            {!!receipt?.later && (
+              <p className={s.payHint} style={{ margin: "6px 0 0" }}>
+                The remaining {money(receipt.later)} is due later — pay it from this same link.
               </p>
             )}
           </div>
@@ -290,6 +304,7 @@ export function PayBox(props: {
           </p>
         ) : (
           <>
+            {part && <p className={s.payHint} style={{ margin: "0 0 2px", fontWeight: 700 }}>{part === "deposit" ? "Deposit due now" : "Remaining balance"}</p>}
             <div className={s.payAmount}>{money(balance)}</div>
             <p className={s.payHint}>{feeText}</p>
             {saveCard && (
@@ -307,7 +322,7 @@ export function PayBox(props: {
                   {brandLabel(quote.brand)} {quote.funding !== "unknown" ? quote.funding : ""} ••{quote.last4}
                 </div>
                 <div className={s.reviewRow}>
-                  <span>Invoice {props.number}</span>
+                  <span>{part === "deposit" ? "Deposit · invoice" : part === "balance" ? "Balance · invoice" : "Invoice"} {props.number}</span>
                   <span>{money(quote.base)}</span>
                 </div>
                 {quote.fee > 0 ? (

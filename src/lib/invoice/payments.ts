@@ -8,8 +8,11 @@ import {
   feeAppliesTo,
   firstChargeAt,
   fmtLongDate,
+  MIN_CHARGE,
   recurringGroups,
   round2,
+  savesCard,
+  subscriptionsDue,
   toCents,
   type Invoice,
   type InvoiceLine,
@@ -36,6 +39,10 @@ import {
  * `ensureSubscriptions` starts a Stripe subscription for those lines whose first charge is
  * one period after the payment — so one-time items are charged once, recurring ones keep
  * billing the card on file.
+ *
+ * A deposit invoice is paid in two parts on the same link: the deposit (its share of the
+ * one-time lines + the recurring first periods) saves the card and starts the subscriptions;
+ * the balance (the rest of the one-time lines) is a plain charge later.
  */
 
 export class PayError extends Error {
@@ -49,8 +56,7 @@ export class PayError extends Error {
   }
 }
 
-/** Stripe's card minimum in USD. */
-export const MIN_CHARGE = 0.5;
+export { MIN_CHARGE, savesCard };
 const REUSABLE: Stripe.PaymentIntent.Status[] = ["requires_payment_method", "requires_confirmation"];
 
 export function stripeSecretKey(): string {
@@ -94,7 +100,7 @@ function stripe(): Stripe {
 function assertPayable(inv: Invoice) {
   if (inv.status === "void") throw new PayError("This invoice has been voided.", 409);
   if (inv.status === "paid" || inv.balance <= 0) throw new PayError("This invoice is already paid in full.", 409, { paid: true });
-  if (inv.balance < MIN_CHARGE) throw new PayError("The balance is below the card minimum — please contact us to settle it.", 409);
+  if (inv.dueNow < MIN_CHARGE) throw new PayError("The balance is below the card minimum — please contact us to settle it.", 409);
 }
 
 export interface CardQuote {
@@ -108,17 +114,12 @@ export interface CardQuote {
   last4: string;
 }
 
-/** Invoices with recurring lines save the card for the subscription that bills them later. */
-export function savesCard(inv: Pick<Invoice, "lines">): boolean {
-  return recurringGroups(inv.lines).length > 0;
-}
-
 async function readCard(inv: Invoice, confirmationTokenId: string) {
   if (!/^ctoken_[A-Za-z0-9]+$/.test(confirmationTokenId)) throw new PayError("Invalid card details — please re-enter the card.", 400);
   const ct = await stripe().confirmationTokens.retrieve(confirmationTokenId);
   if (ct.payment_intent) throw new PayError("That card entry was already used — please enter the card again.", 409);
-  // The page asks to save the card exactly when the invoice has recurring lines; a mismatch
-  // means the invoice was edited while the page was open.
+  // The page asks to save the card exactly when this payment starts the subscriptions; a
+  // mismatch means the invoice was edited, or a payment landed, while the page was open.
   if ((ct.setup_future_usage ?? null) !== (savesCard(inv) ? "off_session" : null)) {
     throw new PayError("This invoice changed while the page was open — please reload it and pay again.", 409);
   }
@@ -128,7 +129,8 @@ async function readCard(inv: Invoice, confirmationTokenId: string) {
 }
 
 export function quoteFor(inv: Invoice, funding: string): Pick<CardQuote, "base" | "fee" | "total" | "feePercent"> {
-  const base = inv.balance;
+  // A deposit invoice charges its deposit first, then the balance.
+  const base = inv.dueNow;
   const pct = effectiveCardFeePercent(inv);
   const fee = cardFeeAllCards() || feeAppliesTo(funding) ? cardFee(base, pct) : 0;
   return { base, fee, total: round2(base + fee), feePercent: fee > 0 ? pct : 0 };
@@ -146,9 +148,11 @@ export function paymentFromIntent(pi: Stripe.PaymentIntent, charge: Stripe.Charg
   const amount = round2((pi.amount_received || pi.amount) / 100);
   const fee = Math.min(round2(Number(pi.metadata?.fee_cents || 0) / 100), amount);
   const customerId = typeof pi.customer === "string" ? pi.customer : pi.customer?.id;
+  const part = pi.metadata?.invoice_part;
   return {
     paymentIntentId: pi.id,
     ...(customerId ? { customerId } : {}),
+    ...(part === "deposit" || part === "balance" ? { part } : {}),
     ...(charge ? { chargeId: charge.id } : {}),
     amount,
     fee,
@@ -168,7 +172,7 @@ async function latestCharge(pi: Stripe.PaymentIntent): Promise<Stripe.Charge | n
 
 /**
  * Record a succeeded PaymentIntent on its invoice (idempotent) and on the Customers tab,
- * then start the monthly billing if that payment settled an invoice with recurring lines.
+ * then start the monthly billing if that payment paid for the recurring lines' first period.
  */
 async function recordSucceeded(inv: Invoice, pi: Stripe.PaymentIntent): Promise<void> {
   const payment = paymentFromIntent(pi, await latestCharge(pi));
@@ -276,15 +280,15 @@ async function productFor(line: InvoiceLine): Promise<string> {
 
 /**
  * Start the subscription(s) that bill an invoice's recurring lines from the second period
- * on, charging the card the settling payment saved. The first charge lands one period after
- * `paidAt` (the first period was on the invoice). Idempotent: an interval that already has a
+ * on, charging the card the settling payment (or a deposit invoice's deposit) saved. The
+ * first charge lands one period after `paidAt` (the first period was on the invoice). Idempotent: an interval that already has a
  * subscription — recorded here, or found in Stripe by its invoice metadata — is skipped, so
  * the page, the webhook and the dashboard can all call it. Throws a PayError with a message
  * for Brandon when it can't be done automatically.
  */
 export async function ensureSubscriptions(inv: Invoice, pi: Stripe.PaymentIntent, paidAt: string): Promise<InvoiceSubscription[]> {
   const missing = missingSubscriptions(inv);
-  if (inv.status !== "paid" || !missing.length) return [];
+  if (!subscriptionsDue(inv) || !missing.length) return [];
   const customer = idOf(pi.customer);
   const paymentMethod = idOf(pi.payment_method);
   if (pi.status !== "succeeded" || pi.setup_future_usage !== "off_session" || !customer || !paymentMethod) {
@@ -342,13 +346,14 @@ export async function ensureSubscriptions(inv: Invoice, pi: Stripe.PaymentIntent
   return out;
 }
 
-/** Dashboard retry: start the subscriptions a paid invoice should have but doesn't. */
+/** Dashboard retry: start the subscriptions a paid (or deposit-paid) invoice should have but doesn't. */
 export async function retrySubscriptions(inv: Invoice): Promise<Invoice> {
-  if (inv.status !== "paid" || !missingSubscriptions(inv).length || !stripeSecretKey()) return inv;
-  const last = inv.payments[inv.payments.length - 1];
-  if (!last) return inv;
-  const pi = await stripe().paymentIntents.retrieve(last.paymentIntentId, { expand: ["latest_charge"] });
-  await ensureSubscriptions(inv, pi, last.paidAt);
+  if (!subscriptionsDue(inv) || !missingSubscriptions(inv).length || !stripeSecretKey()) return inv;
+  // The payment that saved the card (a deposit invoice's balance payment doesn't).
+  const saved = inv.payments.filter((p) => p.customerId).pop() ?? inv.payments[inv.payments.length - 1];
+  if (!saved) return inv;
+  const pi = await stripe().paymentIntents.retrieve(saved.paymentIntentId, { expand: ["latest_charge"] });
+  await ensureSubscriptions(inv, pi, saved.paidAt);
   return refreshed(inv.id);
 }
 
@@ -414,7 +419,7 @@ function isStripeError(err: unknown): err is InstanceType<typeof Stripe.errors.S
 }
 
 /**
- * Charge the invoice balance (+ the credit-card fee when the card is credit).
+ * Charge what's due now — the balance, or a deposit invoice's deposit — (+ the card fee).
  * `expectedTotalCents` is what the customer was shown; if the server's figure differs
  * (the invoice changed, a payment landed), nothing is charged and the page re-quotes.
  */
@@ -433,7 +438,8 @@ export async function payInvoice(invoiceId: string, confirmationTokenId: string,
   const s = stripe();
   // Recurring lines: the card is saved to the client's Stripe customer for the subscription.
   const customer = savesCard(inv) ? await customerFor(inv, found.pis) : null;
-  const description = `Invoice ${inv.number} · ${inv.client.name}`.slice(0, 1000);
+  const part = inv.deposit ? (inv.deposit.paidAt ? "balance" : "deposit") : "";
+  const description = `Invoice ${inv.number}${part ? ` ${part}` : ""} · ${inv.client.name}`.slice(0, 1000);
   const receipt = inv.client.email ? { receipt_email: inv.client.email } : {};
   const metadata = {
     invoice_id: inv.id,
@@ -443,6 +449,8 @@ export async function payInvoice(invoiceId: string, confirmationTokenId: string,
     fee_cents: String(toCents(q.fee)),
     fee_percent: String(q.feePercent),
     card_funding: card.funding,
+    // "" clears it on a reused PaymentIntent.
+    invoice_part: part,
     source: "central-dogma-invoice",
   };
 

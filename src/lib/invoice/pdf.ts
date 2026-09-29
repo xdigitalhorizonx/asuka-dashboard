@@ -33,6 +33,7 @@ import {
   invoiceTotals,
   recurringGroups,
   round2,
+  savesCard,
   type Invoice,
   type InvoiceLine,
   type InvoicePayment,
@@ -902,7 +903,13 @@ class InvoiceLayout {
     const noteW = R - TOT_X;
     const isVoid = inv.status === "void";
     const fees = round2((inv.payments ?? []).reduce((sum, p) => sum + (Number(p.fee) || 0), 0));
+    // A deposit invoice before its deposit: the band is the deposit, the rest is listed above it.
+    const depositOwed = inv.status === "open" && !!inv.deposit && !inv.deposit.paidAt;
+    const firsts = recurringGroups(inv.lines ?? []).map((g) => `first ${g.interval}`);
     const notes = [
+      ...(depositOwed && inv.deposit
+        ? wrap(`Deposit: ${round2(inv.deposit.percent)}% of one-time items${firsts.map((f) => ` + ${f}`).join("")}`, s.fineNote, noteW)
+        : []),
       ...(fees > 0 ? wrap(`Card fee paid: ${fmtMoney(fees)} (in addition to the total)`, s.fineNote, noteW) : []),
       ...(isVoid ? wrap("This invoice was voided. No payment is due.", s.fineNote, noteW) : []),
     ];
@@ -911,7 +918,8 @@ class InvoiceLayout {
     const hasDiscount = !!inv.discount && sums.discount > 0;
     const rowH = 16.5;
     const bandH = 30;
-    const height = 2 * rowH + 7 + (hasDiscount ? rowH : 0) + (hasPaid ? rowH : 0) + 8 + bandH + (notes.length ? 7 + notes.length * 10 : 0);
+    const height =
+      2 * rowH + 7 + (hasDiscount ? rowH : 0) + (hasPaid ? rowH : 0) + (depositOwed ? rowH : 0) + 8 + bandH + (notes.length ? 7 + notes.length * 10 : 0);
     return {
       height,
       draw: (top) => {
@@ -927,15 +935,16 @@ class InvoiceLayout {
         y -= 7;
         row("Total", fmtMoney(inv.total), s.totalLabel, s.totalValue);
         if (hasPaid) row("Paid", fmtMoney(-inv.paid), s.totLabel, s.totValue);
+        if (depositOwed && inv.deposit) row("Balance due later", fmtMoney(inv.deposit.later), s.totLabel, s.totValue);
 
         // Balance due: the one emphasised figure (pink on blush); muted when the invoice is void.
         y -= 8;
         box(this.page, TOT_X, y - bandH, R - TOT_X, bandH, 5, { fill: isVoid ? NEUTRAL_BAND : BLUSH });
-        const balance = inv.status === "open" ? inv.balance : 0;
+        const balance = inv.status !== "open" ? 0 : depositOwed ? inv.dueNow : inv.balance;
         const mid = y - bandH / 2;
         const labelSt = isVoid ? { ...s.balLabel, color: MUTED } : s.balLabel;
         const valueSt = isVoid ? { ...s.balValue, color: MUTED } : s.balValue;
-        this.text("Balance due", labelX, mid - (CAP * labelSt.size) / 2, labelSt);
+        this.text(depositOwed ? "Deposit due now" : "Balance due", labelX, mid - (CAP * labelSt.size) / 2, labelSt);
         this.text(fmtMoney(balance), AMT_R, mid - (CAP * valueSt.size) / 2, valueSt, "right");
         y -= bandH + 7;
         for (const line of notes) {
@@ -949,15 +958,16 @@ class InvoiceLayout {
   /** "Pay online" box: only while something is still owed. */
   private payBox(): Placed | null {
     const { s, inv, seller } = this;
-    if (inv.status !== "open" || !(inv.balance > 0)) return null;
+    if (inv.status !== "open" || !(inv.dueNow > 0)) return null;
     const padX = 14;
     const padY = 11;
     const labelH = 13;
     const innerW = SIDE_W - 2 * padX;
     const pct = effectiveCardFeePercent(inv);
     const url = this.url;
-    // One sentence; when it does not fit on one line it breaks after the semicolon.
-    const fee = fmtMoney(cardFee(inv.balance, pct));
+    // One sentence; when it does not fit on one line it breaks after the semicolon. The fee is
+    // on today's payment (a deposit invoice's deposit until it's in).
+    const fee = fmtMoney(cardFee(inv.dueNow, pct));
     const feeClauses = pct > 0 ? cardFeeWording(pct, cardFeeAllCards()).pdf(fee) : [];
     const feeSentence = feeClauses.join(" ");
     const feeLines =
@@ -969,8 +979,8 @@ class InvoiceLayout {
     const urlLines = url ? wrap(url, s.payUrl, innerW) : [];
     const fallback = url ? "" : "Pay securely by card from your invoice link.";
     const questions = contact.length ? `Questions? ${contact.join(" \u00b7 ")}` : "";
-    // Recurring lines: paying by card starts a subscription on that card.
-    const groups = recurringGroups(inv.lines ?? []);
+    // Recurring lines: the payment that covers their first period starts a subscription on that card.
+    const groups = savesCard({ lines: inv.lines ?? [], payments: inv.payments ?? [] }) ? recurringGroups(inv.lines ?? []) : [];
     const renewal = groups.length ? `Then ${groups.map((g) => `${fmtMoney(g.amount)}/${g.interval === "month" ? "mo" : "yr"}`).join(" + ")} auto-bills that card.` : "";
     const blocks: TextBlock[] = [
       { lines: urlLines, style: s.payUrl, leading: 13, gapBefore: 0 },
@@ -1110,7 +1120,13 @@ export async function renderInvoicePdf(inv: Invoice, opts: InvoicePdfOptions): P
   const client = plain(inv.client?.name);
   const seller = plain(opts.seller.name) || "Digital Horizon";
   const status =
-    inv.status === "paid" ? "paid" : inv.status === "void" ? "void" : `balance due ${fmtMoney(inv.balance)}`;
+    inv.status === "paid"
+      ? "paid"
+      : inv.status === "void"
+        ? "void"
+        : inv.deposit && !inv.deposit.paidAt
+          ? `deposit due ${fmtMoney(inv.dueNow)}`
+          : `balance due ${fmtMoney(inv.balance)}`;
   const now = new Date();
   const title = [number ? `Invoice ${number}` : "Invoice", client].filter(Boolean).join(" \u2014 ");
   doc.setTitle(title, { showInWindowTitleBar: true });

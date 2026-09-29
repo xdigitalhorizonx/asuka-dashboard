@@ -27,7 +27,7 @@ export function addInvoiceTransaction(customers: Customer[], inv: Invoice, p: In
     amount: p.amount,
     method: "card",
     date: dateOf(Math.floor(Date.parse(p.paidAt) / 1000)),
-    memo: `Invoice ${inv.number}${p.fee > 0 ? ` · incl. ${fmtMoney(p.fee)} card fee` : ""}`,
+    memo: `Invoice ${inv.number}${p.part ? ` ${p.part}` : ""}${p.fee > 0 ? ` · incl. ${fmtMoney(p.fee)} card fee` : ""}`,
     createdAt: p.paidAt,
     stripeId: p.chargeId,
   };

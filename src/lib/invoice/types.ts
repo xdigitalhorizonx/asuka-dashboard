@@ -62,6 +62,11 @@ export interface InvoiceDoc {
   lines: InvoiceLine[];
   /** Optional discount, applied to the sum of the lines. */
   discount?: InvoiceDiscount;
+  /**
+   * Deposit invoice (the dashboard's "50% deposit" box): the first payment is this percent of
+   * the one-time lines plus every recurring line's first period; the rest is paid later.
+   */
+  depositPercent?: number;
   /** What's owed: the sum of the lines, less any discount. */
   total: number;
   /**
@@ -100,6 +105,8 @@ export interface InvoicePayment {
   livemode?: boolean;
   /** Stripe customer the card was saved to (invoices with monthly/yearly lines). */
   customerId?: string;
+  /** Deposit invoices: which of the two payments this was. */
+  part?: "deposit" | "balance";
 }
 
 /**
@@ -121,6 +128,17 @@ export interface InvoiceSubscription {
 
 export type InvoiceStatus = "open" | "paid" | "void";
 
+/** A deposit invoice's two payments, in dollars before any card fee. */
+export interface InvoiceDeposit {
+  percent: number;
+  /** The first payment: the deposit share of the one-time lines + recurring first periods. */
+  now: number;
+  /** The rest of the one-time lines, paid later on the same link. */
+  later: number;
+  /** When the deposit was paid in full. */
+  paidAt?: string;
+}
+
 /** An invoice as served: latest version + its payments + derived balance. */
 export interface Invoice extends InvoiceDoc {
   payments: InvoicePayment[];
@@ -128,10 +146,16 @@ export interface Invoice extends InvoiceDoc {
   /** Applied to the invoice balance (payments minus card fees). */
   paid: number;
   balance: number;
+  /** What the next card payment covers: a deposit invoice's deposit until it's in, else the balance. 0 unless open. */
+  dueNow: number;
+  deposit?: InvoiceDeposit;
   status: InvoiceStatus;
   /** When the balance reached zero. */
   paidAt?: string;
 }
+
+/** Stripe's card minimum in USD. */
+export const MIN_CHARGE = 0.5;
 
 export function round2(n: number): number {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -153,6 +177,36 @@ export function invoiceTotals(lines: Pick<InvoiceLine, "amount">[], discount?: I
     off = discount.kind === "percent" ? round2((subtotal * Math.min(discount.value, 100)) / 100) : Math.min(round2(discount.value), subtotal);
   }
   return { subtotal, discount: off, total: round2(Math.max(subtotal - off, 0)) };
+}
+
+/** A line that keeps billing after this invoice (a zero repeat price never does). */
+function recurs(l: Pick<InvoiceLine, "recurring">): boolean {
+  return !!l.recurring && l.recurring.amount > 0;
+}
+
+/**
+ * A deposit invoice's two payments: `percent` of the one-time lines plus every recurring
+ * line's first period now, the rest of the one-time lines later. A discount comes off both
+ * in proportion, so 10% off still leaves exactly half the one-time price for later.
+ * Null when there's no deposit or nothing one-time to split.
+ */
+export function depositSplit(
+  lines: Pick<InvoiceLine, "amount" | "recurring">[],
+  discount: InvoiceDiscount | null | undefined,
+  percent: number | null | undefined
+): { now: number; later: number } | null {
+  if (!percent || !(percent > 0 && percent < 100)) return null;
+  const { subtotal, discount: off, total } = invoiceTotals(lines, discount);
+  const oneTime = sumLines(lines.filter((l) => !recurs(l)));
+  if (!(oneTime > 0) || !(subtotal > 0)) return null;
+  const later = round2((oneTime * (1 - off / subtotal) * (100 - percent)) / 100);
+  return { now: round2(total - later), later };
+}
+
+/** "50% deposit on the one-time items, plus the first month. The other $1,200.00 is due later." */
+export function depositWording(d: Pick<InvoiceDeposit, "percent" | "later">, lines: InvoiceLine[]): string {
+  const firsts = recurringGroups(lines).map((g) => `first ${g.interval}`);
+  return `${round2(d.percent)}% deposit on the one-time items${firsts.length ? `, plus the ${firsts.join(" and ")}` : ""}. The other ${fmtMoney(d.later)} is due later.`;
 }
 
 /** "Discount (10%)" or "Discount". */
@@ -242,6 +296,20 @@ export function recurringGroups(lines: InvoiceLine[]): RecurringGroup[] {
 }
 
 /**
+ * The payment that covers the recurring lines' first period saves the card for the
+ * subscription: the invoice's first payment (a deposit invoice's deposit). A later balance
+ * payment doesn't — the subscription already has its card.
+ */
+export function savesCard(inv: Pick<Invoice, "lines" | "payments">): boolean {
+  return recurringGroups(inv.lines).length > 0 && inv.payments.length === 0;
+}
+
+/** The first period is paid for — in full, or a deposit invoice's deposit — so billing should start. */
+export function subscriptionsDue(inv: Pick<Invoice, "status" | "deposit">): boolean {
+  return inv.status === "paid" || (inv.status === "open" && !!inv.deposit?.paidAt);
+}
+
+/**
  * One billing period after `from`, same time of day. A month-end date clamps to the
  * shorter month (Jan 31 → Feb 28), as Stripe does, so the first charge never skips a month.
  */
@@ -271,19 +339,24 @@ export function deriveInvoice(doc: InvoiceDoc, payments: InvoicePayment[], subsc
   const paid = round2(sorted.reduce((s, p) => s + (p.amount - p.fee), 0));
   const balance = round2(Math.max(doc.total - paid, 0));
   const status: InvoiceStatus = doc.voided ? "void" : balance <= 0 && doc.total > 0 ? "paid" : "open";
-  let paidAt: string | undefined;
-  if (status === "paid") {
+  /** When payments (less fees) first added up to `target`. */
+  const reached = (target: number): string | undefined => {
     let running = 0;
     for (const p of sorted) {
       running = round2(running + p.amount - p.fee);
-      if (running >= doc.total) {
-        paidAt = p.paidAt;
-        break;
-      }
+      if (running >= target) return p.paidAt;
     }
-  }
+    return undefined;
+  };
+  const paidAt = status === "paid" ? reached(doc.total) : undefined;
+  const split = depositSplit(doc.lines, doc.discount, doc.depositPercent);
+  const depositPaidAt = split ? reached(split.now) : undefined;
+  const deposit: InvoiceDeposit | undefined = split
+    ? { percent: doc.depositPercent as number, ...split, ...(depositPaidAt ? { paidAt: depositPaidAt } : {}) }
+    : undefined;
+  const dueNow = status !== "open" ? 0 : deposit && paid < deposit.now ? round2(deposit.now - paid) : balance;
   const subs = subscriptions.slice().sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
-  return { ...doc, payments: sorted, subscriptions: subs, paid, balance, status, ...(paidAt ? { paidAt } : {}) };
+  return { ...doc, payments: sorted, subscriptions: subs, paid, balance, dueNow, ...(deposit ? { deposit } : {}), status, ...(paidAt ? { paidAt } : {}) };
 }
 
 /**

@@ -7,7 +7,21 @@ import { seller } from "@/lib/invoice/seller";
 import { paymentsStatus, reconcileInvoice, stripePublishableKey } from "@/lib/invoice/payments";
 import { getInvoiceWithIntents, isInvoiceId } from "@/lib/invoice/store";
 import { cardFeeAllCards, effectiveCardFeePercent } from "@/lib/invoice/validate";
-import { addPeriod, cardFee, cardFeeWording, discountLabel, fmtLongDate, fmtMoney, invoiceTotals, localYmd, recurringGroups, round2, type Invoice } from "@/lib/invoice/types";
+import {
+  addPeriod,
+  cardFee,
+  cardFeeWording,
+  depositWording,
+  discountLabel,
+  fmtLongDate,
+  fmtMoney,
+  invoiceTotals,
+  localYmd,
+  recurringGroups,
+  round2,
+  savesCard,
+  type Invoice,
+} from "@/lib/invoice/types";
 import { PayBox } from "./PayBox";
 import s from "../invoice.module.css";
 
@@ -58,18 +72,25 @@ export default async function InvoicePage({ params }: Props) {
   const totals = invoiceTotals(inv.lines, inv.discount);
   const feePct = effectiveCardFeePercent(inv);
   const feeAllCards = cardFeeAllCards();
-  const feeCard = cardFee(inv.balance, feePct);
+  // Today's payment: the balance, or a deposit invoice's deposit until it's in.
+  const feeCard = cardFee(inv.dueNow, feePct);
   const dueText = inv.dueDate ? `Due ${fmtLongDate(inv.dueDate)}` : "Due on receipt";
   const pdfHref = `/api/public/invoices/${inv.id}/pdf`;
+  const depositOwed = open && !!inv.deposit && !inv.deposit.paidAt;
+  const depositIn = open && !!inv.deposit?.paidAt;
   // The renewal date is fixed here (Digital Horizon's calendar), not in the browser: the pay box
-  // is server-rendered too, and a UTC server + Pacific browser would disagree after 5 pm.
-  const recurring = recurringGroups(inv.lines).map((g) => ({
-    interval: g.interval,
-    amount: g.amount,
-    from: fmtLongDate(localYmd(addPeriod(new Date(), g.interval).toISOString())),
-  }));
+  // is server-rendered too, and a UTC server + Pacific browser would disagree after 5 pm. Only
+  // the payment that starts the subscription (the first) saves the card and mentions renewals.
+  const recurring = savesCard(inv)
+    ? recurringGroups(inv.lines).map((g) => ({
+        interval: g.interval,
+        amount: g.amount,
+        from: fmtLongDate(localYmd(addPeriod(new Date(), g.interval).toISOString())),
+      }))
+    : [];
   const per = (i: "month" | "year") => (i === "month" ? "month" : "year");
-  const lastCard = inv.payments[inv.payments.length - 1];
+  // The card the subscription bills: the payment that saved it (a deposit invoice’s balance card isn’t).
+  const cardOnFile = inv.payments.filter((p) => p.customerId).pop() ?? inv.payments[inv.payments.length - 1];
 
   return (
     <div className={`${s.page} ${inter.variable} ${nunito.variable}`}>
@@ -105,6 +126,8 @@ export default async function InvoicePage({ params }: Props) {
                 <span className={`${s.pill} ${s.pillPaid}`}>Paid{inv.paidAt ? ` · ${fmtLongDate(localYmd(inv.paidAt))}` : ""}</span>
               ) : inv.status === "void" ? (
                 <span className={`${s.pill} ${s.pillVoid}`}>Void</span>
+              ) : depositIn && inv.deposit?.paidAt ? (
+                <span className={`${s.pill} ${s.pillOpen}`}>Deposit paid · {fmtLongDate(localYmd(inv.deposit.paidAt))}</span>
               ) : (
                 <span className={`${s.pill} ${s.pillOpen}`}>{dueText}</span>
               )}
@@ -113,9 +136,15 @@ export default async function InvoicePage({ params }: Props) {
             {open && (
               <div className={s.due}>
                 <div>
-                  <div className={s.dueLabel}>Amount due</div>
-                  <div className={s.dueAmount}>{fmtMoney(inv.balance)}</div>
-                  <div className={s.dueSub}>{dueText}</div>
+                  <div className={s.dueLabel}>{depositOwed ? "Deposit due now" : depositIn ? "Balance due" : "Amount due"}</div>
+                  <div className={s.dueAmount}>{fmtMoney(inv.dueNow)}</div>
+                  <div className={s.dueSub}>
+                    {depositOwed && inv.deposit
+                      ? `${dueText}. ${depositWording(inv.deposit, inv.lines)}`
+                      : depositIn && inv.deposit
+                        ? `Deposit of ${fmtMoney(inv.deposit.now)} received — thank you. This is the rest.`
+                        : dueText}
+                  </div>
                 </div>
                 <a className={s.jump} href="#pay">
                   Pay by card ↓
@@ -213,9 +242,15 @@ export default async function InvoicePage({ params }: Props) {
                   <strong>−{fmtMoney(inv.paid)}</strong>
                 </div>
               )}
+              {depositOwed && inv.deposit && (
+                <div className={s.totalRow}>
+                  <span>Balance due later</span>
+                  <strong>{fmtMoney(inv.deposit.later)}</strong>
+                </div>
+              )}
               <div className={s.balanceRow}>
-                <span>Balance due</span>
-                <span>{fmtMoney(inv.balance)}</span>
+                <span>{depositOwed ? "Deposit due now" : "Balance due"}</span>
+                <span>{fmtMoney(depositOwed ? inv.dueNow : inv.balance)}</span>
               </div>
             </div>
 
@@ -232,7 +267,7 @@ export default async function InvoicePage({ params }: Props) {
                 {inv.subscriptions
                   .map((sub) => `${fmtMoney(sub.amount)}/${per(sub.interval)} starts ${fmtLongDate(localYmd(sub.startsAt))}`)
                   .join(" · ")}
-                , charged automatically to {lastCard ? `${brandName(lastCard.brand)} ••${lastCard.last4 || ""}` : "the card on file"}. To change or cancel, email {me.email}.
+                , charged automatically to {cardOnFile ? `${brandName(cardOnFile.brand)} ••${cardOnFile.last4 || ""}` : "the card on file"}. To change or cancel, email {me.email}.
               </p>
             )}
 
@@ -245,9 +280,10 @@ export default async function InvoicePage({ params }: Props) {
                       {fmtLongDate(localYmd(p.paidAt))} · {brandName(p.brand)}
                       {p.funding && p.funding !== "unknown" ? ` ${p.funding}` : ""}
                       {p.last4 ? ` ••${p.last4}` : ""}
+                      {p.part ? ` · ${p.part === "deposit" ? "Deposit" : "Balance"}` : ""}
                     </span>
                     <strong>{fmtMoney(p.amount)}</strong>
-                    {p.fee > 0 && <span className={s.metaMuted}>Includes {fmtMoney(p.fee)} credit card surcharge</span>}
+                    {p.fee > 0 && <span className={s.metaMuted}>Includes {fmtMoney(p.fee)} card fee</span>}
                     {p.receiptUrl && (
                       <a href={p.receiptUrl} target="_blank" rel="noopener noreferrer">
                         Receipt ↗
@@ -277,7 +313,7 @@ export default async function InvoicePage({ params }: Props) {
             {/* Phones/tablets only (CSS): follows the reader, then parks here above the pay box. */}
             {open && pay.ready && (
               <a className={s.stickyPay} href="#pay">
-                {feePct === 0 || feeAllCards ? `Pay ${fmtMoney(round2(inv.balance + (feePct > 0 ? feeCard : 0)))} by card` : "Pay by card"}
+                {feePct === 0 || feeAllCards ? `Pay ${fmtMoney(round2(inv.dueNow + (feePct > 0 ? feeCard : 0)))} by card` : "Pay by card"}
                 <span aria-hidden="true">↓</span>
               </a>
             )}
@@ -290,7 +326,9 @@ export default async function InvoicePage({ params }: Props) {
               <PayBox
                 invoiceId={inv.id}
                 number={inv.number}
-                balance={inv.balance}
+                balance={inv.dueNow}
+                part={depositOwed ? "deposit" : depositIn ? "balance" : null}
+                later={depositOwed && inv.deposit ? inv.deposit.later : 0}
                 cardFeePercent={feePct}
                 cardFeeAllCards={feeAllCards}
                 publishableKey={stripePublishableKey()}

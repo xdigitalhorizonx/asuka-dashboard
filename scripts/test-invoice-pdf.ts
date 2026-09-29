@@ -427,6 +427,38 @@ const CASES: Case[] = [
     },
   },
   {
+    key: "l-deposit",
+    title: "(l) 50% deposit, nothing paid yet",
+    inv: deriveInvoice(baseDoc({ number: "DH-1012", depositPercent: 50 }), []),
+    publicUrl: PUBLIC_URL,
+    check: (r) => {
+      assert.equal(r.pages.length, 1, "fits on one page");
+      has(r, "Total $2,494.99");
+      has(r, "Balance due later $1,200.00");
+      has(r, "Deposit due now $1,294.99");
+      has(r, "Deposit: 50% of one-time items + first month");
+      has(r, "Credit cards add our 2.9% surcharge ($37.55), not more than our cost; debit and prepaid cards pay none.");
+      has(r, "Then $94.99/mo auto-bills that card.");
+      lacks(r, "Balance due $");
+    },
+  },
+  {
+    key: "m-deposit-paid",
+    title: "(m) 50% deposit paid, balance still open",
+    inv: deriveInvoice(baseDoc({ number: "DH-1013", depositPercent: 50 }), [
+      { paymentIntentId: "pi_dep", amount: 1332.54, fee: 37.55, brand: "visa", last4: "4242", funding: "credit", paidAt: "2026-09-29T17:00:00Z", customerId: "cus_x", part: "deposit" },
+    ]),
+    publicUrl: PUBLIC_URL,
+    check: (r) => {
+      has(r, "Paid -$1,294.99");
+      has(r, "Balance due $1,200.00");
+      has(r, "surcharge ($34.80)");
+      lacks(r, "auto-bills");
+      lacks(r, "Deposit due now");
+      lacks(r, "due later");
+    },
+  },
+  {
     key: "j-extremes",
     title: "(j) extremes: giant fields, long number, negative line, 30 payments",
     inv: deriveInvoice(

@@ -220,6 +220,14 @@ await check("customers tab: the Stripe feed keeps an invoice payment's memo (and
   assert.equal(applyStripeCharge(customers, buildIndex(customers), { ...ch, amount_refunded: 1000 } as any, "2026-09-30T17:01:00.000Z"), "updated");
   assert.equal(customers[0].transactions[0].memo, "Invoice DH-11 · incl. $72.35 card fee · partial refund 10.00");
   assert.equal(customers[0].transactions[0].amount, 2557.34);
+
+  // A deposit's memo names the part, and the Stripe feed keeps that too.
+  addInvoiceTransaction(customers, inv, { paymentIntentId: "pi_m2", chargeId: "ch_m2", amount: 1332.54, fee: 37.55, paidAt: "2026-09-29T18:00:00.000Z", part: "deposit" });
+  const memo2 = () => customers[0].transactions.find((t) => t.stripeId === "ch_m2")?.memo;
+  assert.equal(memo2(), "Invoice DH-11 deposit · incl. $37.55 card fee");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  assert.equal(applyStripeCharge(customers, buildIndex(customers), { ...ch, id: "ch_m2", amount: 133254, amount_refunded: 1000 } as any, "2026-09-30T18:01:00.000Z"), "updated");
+  assert.equal(memo2(), "Invoice DH-11 deposit · incl. $37.55 card fee · partial refund 10.00");
 });
 
 await check("recurring: one group per interval, zero prices never recur; addPeriod clamps month ends", () => {
@@ -244,8 +252,8 @@ await check("recurring: one group per interval, zero prices never recur; addPeri
 });
 
 await check("subscriptions: only a paid invoice with recurring lines needs one, one per interval", () => {
-  assert.equal(savesCard({ lines }), true);
-  assert.equal(savesCard({ lines: lines.filter((l) => !l.recurring) }), false);
+  assert.equal(savesCard({ lines, payments: [] }), true);
+  assert.equal(savesCard({ lines: lines.filter((l) => !l.recurring), payments: [] }), false);
   const doc = { ...input, id: "s".repeat(24), number: "DH-8", version: 1, voided: false, total: 2494.99, createdAt: "", updatedAt: "" };
   const pay = { paymentIntentId: "pi_s", amount: 2494.99, fee: 0, paidAt: "2026-09-29T17:00:00.000Z" };
   assert.equal(missingSubscriptions(types.deriveInvoice(doc, [])).length, 1, "open invoices report what they will need");
@@ -350,6 +358,82 @@ await check("discount: percent or dollars off the lines, validated, saved, clear
   const edited = await store.saveVersion(voided, validateInvoiceInput(input), voided.version);
   assert.equal(edited.discount, undefined, "an edit without a discount clears it");
   assert.equal(edited.total, 2494.99);
+});
+
+await check("deposit: 50% of the one-time items + the first month now, the rest later; discount spread; validation; store", async () => {
+  // One-time: 0 + 2,000 + 300 + 100 = 2,400. Monthly first month: 94.99.
+  assert.deepEqual(types.depositSplit(lines, undefined, 50), { now: 1294.99, later: 1200 });
+  assert.deepEqual(types.depositSplit(lines, { kind: "percent", value: 10 }, 50), { now: 1165.49, later: 1080 }, "10% off both parts: half of $2,160 later");
+  const amt = types.depositSplit(lines, { kind: "amount", value: 100 }, 50)!;
+  assert.equal(types.round2(amt.now + amt.later), 2394.99, "$100 off: the parts still add up to the total");
+  assert.deepEqual(types.depositSplit(lines.filter((l) => !l.recurring), undefined, 50), { now: 1200, later: 1200 });
+  const odd = types.depositSplit([{ amount: 100.01, recurring: null }], undefined, 50)!;
+  assert.ok(types.round2(odd.now + odd.later) === 100.01 && Math.abs(odd.now - odd.later) <= 0.011, `odd cent: ${JSON.stringify(odd)}`);
+  assert.equal(types.depositSplit(lines.filter((l) => l.recurring), undefined, 50), null, "nothing one-time to split");
+  assert.equal(types.depositSplit(lines, undefined, undefined), null);
+  assert.equal(types.depositSplit(lines, undefined, 100), null);
+  assert.equal(types.depositWording({ percent: 50, later: 1200 }, lines), "50% deposit on the one-time items, plus the first month. The other $1,200.00 is due later.");
+  assert.equal(types.depositWording({ percent: 50, later: 1200 }, lines.filter((l) => !l.recurring)), "50% deposit on the one-time items. The other $1,200.00 is due later.");
+
+  const v = (o: Record<string, unknown>) => validateInvoiceInput({ ...input, ...o });
+  assert.equal(v({ depositPercent: 50 }).depositPercent, 50);
+  assert.equal(v({}).depositPercent, undefined);
+  assert.equal(v({ depositPercent: null }).depositPercent, undefined);
+  const bad = (o: Record<string, unknown>, re: RegExp) => assert.throws(() => v(o), (e: unknown) => e instanceof InvoiceInputError && re.test((e as Error).message));
+  bad({ depositPercent: 50, lines: lines.filter((l) => l.recurring) }, /no one-time items/);
+  bad({ depositPercent: 150 }, /1 to 99/);
+  bad({ depositPercent: 12.5 }, /whole percent/);
+  bad({ depositPercent: 50, lines: [{ ...lines[1], amount: 0.9 }] }, /at least \$0\.50/);
+
+  const made = await store.createInvoice(v({ depositPercent: 50 }));
+  assert.equal(made.depositPercent, 50);
+  assert.equal(made.total, 2494.99);
+  assert.deepEqual({ dueNow: made.dueNow, deposit: made.deposit }, { dueNow: 1294.99, deposit: { percent: 50, now: 1294.99, later: 1200 } });
+  const voided = await store.saveVersion(made, { voided: true }, made.version);
+  assert.equal(voided.depositPercent, 50, "void keeps the deposit");
+  const cleared = await store.saveVersion(voided, validateInvoiceInput(input), voided.version);
+  assert.equal(cleared.depositPercent, undefined, "an edit without it clears it");
+  assert.equal(cleared.deposit, undefined);
+  assert.equal(cleared.dueNow, 0, "still void, so nothing is due");
+});
+
+await check("deposit: the deposit saves the card and starts billing; the balance is a plain charge", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const asPi = (o: object) => o as any;
+  const doc = { ...input, depositPercent: 50, id: "d".repeat(24), number: "DH-13", version: 1, voided: false, total: 2494.99, createdAt: "", updatedAt: "" };
+  const open = types.deriveInvoice(doc, []);
+  assert.equal(open.dueNow, 1294.99);
+  assert.equal(open.balance, 2494.99);
+  assert.equal(savesCard(open), true, "the deposit saves the card");
+  assert.equal(types.subscriptionsDue(open), false);
+  assert.deepEqual(quoteFor(open, "credit"), { base: 1294.99, fee: 37.55, total: 1332.54, feePercent: 2.9 }, "fee on the deposit only");
+
+  const dep = { paymentIntentId: "pi_d", amount: 1332.54, fee: 37.55, paidAt: "2026-09-29T17:00:00.000Z", customerId: "cus_d", part: "deposit" as const };
+  const half = types.deriveInvoice(doc, [dep]);
+  assert.equal(half.status, "open");
+  assert.equal(half.deposit?.paidAt, dep.paidAt);
+  assert.equal(half.dueNow, 1200);
+  assert.equal(half.balance, 1200);
+  assert.equal(types.subscriptionsDue(half), true, "monthly billing starts with the deposit");
+  assert.deepEqual(missingSubscriptions(half).map((g) => g.interval), ["month"]);
+  assert.equal(savesCard(half), false, "the balance payment doesn't save the card again");
+  assert.deepEqual(quoteFor(half, "credit"), { base: 1200, fee: 34.8, total: 1234.8, feePercent: 2.9 });
+
+  const bal = { paymentIntentId: "pi_b", amount: 1234.8, fee: 34.8, paidAt: "2026-10-15T17:00:00.000Z", part: "balance" as const };
+  const done = types.deriveInvoice(doc, [dep, bal]);
+  assert.equal(done.status, "paid");
+  assert.equal(done.paidAt, bal.paidAt);
+  assert.equal(done.dueNow, 0);
+  assert.equal(done.deposit?.paidAt, dep.paidAt);
+
+  assert.equal(types.subscriptionsDue(types.deriveInvoice({ ...doc, voided: true }, [dep])), false, "a voided invoice never starts billing");
+  const plain = types.deriveInvoice({ ...doc, depositPercent: undefined }, []);
+  assert.equal(plain.dueNow, 2494.99);
+  assert.equal(plain.deposit, undefined);
+
+  const pi = { id: "pi_p", amount: 1000, amount_received: 1000, created: 1790700000, livemode: false, metadata: { invoice_part: "deposit" } };
+  assert.equal(paymentFromIntent(asPi(pi), null).part, "deposit");
+  assert.equal(paymentFromIntent(asPi({ ...pi, metadata: { invoice_part: "" } }), null).part, undefined);
 });
 
 await check("card fee on every card (INVOICE_CARD_FEE_CARDS=all): debit/prepaid/unknown pay it too; wording follows", () => {

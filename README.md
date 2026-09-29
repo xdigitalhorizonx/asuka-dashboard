@@ -220,6 +220,12 @@ Browser UI uses same-origin `GET/POST /api/state` (session cookie, or `Authoriza
 - **Discount:** the draft/edit view takes a percent or dollar discount off the lines. It lowers
   today's total (and so the card fee); the page and PDF show Subtotal · Discount · Total. Subscription
   renewals keep each line's own "then $___/mo" price.
+- **50% deposit:** a checkbox in the draft/edit view (`depositPercent: 50`). The first payment is
+  half the one-time lines plus every recurring line's first period (a discount comes off both parts
+  in proportion); it saves the card and starts the subscription, first renewal one period after the
+  deposit. The other half is paid later on the same link as a plain charge (no card save, no second
+  subscription). The card fee is charged on each payment. Page, pay box and PDF show "Deposit due
+  now" and "Balance due later"; the dashboard shows "$X now", then *Deposit paid*.
 - **Phones:** below 980px the pay page adds a pay button that follows the reader and parks above the
   pay box; card fields are 16px (no iOS focus zoom); tap targets are 44px. On the dashboard, fields
   are 16px, row buttons 44px, and a long draft keeps Discard/Create pinned to the bottom. All phone
@@ -227,7 +233,7 @@ Browser UI uses same-origin `GET/POST /api/state` (session cookie, or `Authoriza
 - **Monthly / yearly lines → Stripe subscription.** A line set to *Monthly/Yearly* bills its
   first period on the invoice. When the client pays, the Payment Element saves the card
   (`setup_future_usage=off_session`) to their Stripe customer (the newest one with the invoice's
-  email, else a new one), and once the invoice is paid `ensureSubscriptions` starts a subscription for
+  email, else a new one), and once the invoice (or its deposit) is paid `ensureSubscriptions` starts a subscription for
   those lines (one per interval, a product per service name) with the first charge one period after
   the payment (`billing_cycle_anchor`, no proration). Started from the page, the webhook and
   *Check Stripe*; idempotent (records `invoices/<id>/sub-<sub>.json`, finds existing ones by

@@ -130,9 +130,9 @@ export type InvoiceInput = Omit<InvoiceDoc, "id" | "number" | "version" | "voide
 
 function finalize(input: InvoiceInput): Omit<InvoiceInput, "lines"> & { lines: InvoiceInput["lines"]; total: number } {
   const lines = input.lines.map((l) => ({ ...l, amount: round2(l.amount) }));
-  const { discount, ...rest } = input;
-  // An absent or zero discount is dropped from the saved JSON (not stored as undefined/0).
-  const keep = discount && discount.value > 0 ? { discount } : {};
+  const { discount, depositPercent, ...rest } = input;
+  // An absent or zero discount / deposit is dropped from the saved JSON (not stored as undefined/0).
+  const keep = { ...(discount && discount.value > 0 ? { discount } : {}), ...(depositPercent ? { depositPercent } : {}) };
   return { ...rest, ...keep, lines, total: invoiceTotals(lines, discount).total };
 }
 
@@ -159,6 +159,7 @@ export async function saveVersion(current: Invoice, next: Partial<InvoiceInput> 
     notes: current.notes,
     ...(current.source ? { source: current.source } : {}),
     ...(current.discount ? { discount: current.discount } : {}),
+    ...(current.depositPercent ? { depositPercent: current.depositPercent } : {}),
   };
   const { voided, ...fields } = next;
   const merged = finalize({ ...base, ...fields });

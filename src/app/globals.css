@@ -580,6 +580,10 @@ main.content {
     min-height: 44px;
     white-space: nowrap;
   }
+  /* the "50% deposit" box: a thumb-sized row */
+  .draft-deposit label {
+    min-height: 44px !important;
+  }
   /* long drafts: Discard / Create stay in reach at the bottom of the screen */
   .draft-actions {
     position: sticky;

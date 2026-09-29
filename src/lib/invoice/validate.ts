@@ -1,5 +1,5 @@
 import { PROPOSALS_PREFIX, type InvoiceInput } from "./store";
-import { fmtMoney, invoiceTotals, round2, sumLines, type InvoiceDiscount, type InvoiceLine, type InvoiceParty } from "./types";
+import { depositSplit, fmtMoney, invoiceTotals, MIN_CHARGE, round2, sumLines, type InvoiceDiscount, type InvoiceLine, type InvoiceParty } from "./types";
 
 /**
  * Everything the dashboard posts to create or edit an invoice passes through here:
@@ -98,6 +98,17 @@ function discount(v: unknown, subtotal: number): InvoiceDiscount | undefined {
   return { kind, value: round2(value) };
 }
 
+/** A deposit percent (the dashboard's box sends 50), or undefined for none. */
+function deposit(v: unknown, lines: InvoiceLine[], disc: InvoiceDiscount | undefined): number | undefined {
+  if (v === undefined || v === null || v === "" || v === false || v === 0) return undefined;
+  const pct = Number(v);
+  if (!Number.isInteger(pct) || pct < 1 || pct > 99) throw new InvoiceInputError("Deposit: use a whole percent from 1 to 99.");
+  const split = depositSplit(lines, disc, pct);
+  if (!split) throw new InvoiceInputError(`${pct}% deposit: there are no one-time items to split — add one or untick the deposit.`);
+  if (split.now < MIN_CHARGE || split.later < MIN_CHARGE) throw new InvoiceInputError(`${pct}% deposit: each payment must be at least ${fmtMoney(MIN_CHARGE)}.`);
+  return pct;
+}
+
 export function validateInvoiceInput(raw: unknown): InvoiceInput {
   const o = (raw ?? {}) as Record<string, unknown>;
   const lines = Array.isArray(o.lines) ? o.lines.slice(0, 101) : [];
@@ -129,8 +140,9 @@ export function validateInvoiceInput(raw: unknown): InvoiceInput {
     client: party(o.client),
     project: str(o.project, 2000),
     lines: parsedLines,
-    // Always present (undefined = none), so an edit that removes the discount clears it.
+    // Always present (undefined = none), so an edit that removes the discount or deposit clears it.
     discount: disc,
+    depositPercent: deposit(o.depositPercent, parsedLines, disc),
     cardFeePercent: Math.round(fee * 100) / 100,
     notes: str(o.notes, 1000),
     ...(source ? { source } : {}),
