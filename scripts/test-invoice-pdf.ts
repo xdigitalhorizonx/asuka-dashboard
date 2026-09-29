@@ -413,6 +413,20 @@ const CASES: Case[] = [
     },
   },
   {
+    key: "k-discount",
+    title: "(k) 10% discount off the lines",
+    inv: deriveInvoice(baseDoc({ number: "DH-1011", discount: { kind: "percent", value: 10 }, total: 2245.49 }), []),
+    publicUrl: PUBLIC_URL,
+    check: (r) => {
+      assert.equal(r.pages.length, 1, "fits on one page");
+      has(r, "Subtotal $2,494.99");
+      has(r, "Discount (10%) -$249.50");
+      has(r, "Total $2,245.49");
+      has(r, "Balance due $2,245.49");
+      has(r, "Credit cards add our 2.9% surcharge ($65.12), not more than our cost; debit and prepaid cards pay none.");
+    },
+  },
+  {
     key: "j-extremes",
     title: "(j) extremes: giant fields, long number, negative line, 30 payments",
     inv: deriveInvoice(

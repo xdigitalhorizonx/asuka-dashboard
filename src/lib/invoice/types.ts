@@ -26,6 +26,17 @@ export interface InvoiceLine {
   note: string;
 }
 
+/**
+ * A discount on this invoice's total: a percent of the lines, or a dollar amount. It lowers
+ * what's paid today (and so the card fee); later subscription charges use each line's own
+ * recurring price.
+ */
+export interface InvoiceDiscount {
+  kind: "percent" | "amount";
+  /** Percent (0–100) or dollars. */
+  value: number;
+}
+
 export interface InvoiceParty {
   name: string;
   email: string;
@@ -49,7 +60,9 @@ export interface InvoiceDoc {
   /** One-paragraph scope (the proposal summary). May be "". */
   project: string;
   lines: InvoiceLine[];
-  /** Sum of line amounts. */
+  /** Optional discount, applied to the sum of the lines. */
+  discount?: InvoiceDiscount;
+  /** What's owed: the sum of the lines, less any discount. */
   total: number;
   /**
    * Surcharge added at payment time when the customer pays with a CREDIT card
@@ -132,6 +145,21 @@ export function sumLines(lines: Pick<InvoiceLine, "amount">[]): number {
   return round2(lines.reduce((s, l) => s + (Number(l.amount) || 0), 0));
 }
 
+/** Lines → their sum, the discount in dollars (never more than the sum), and the total due. */
+export function invoiceTotals(lines: Pick<InvoiceLine, "amount">[], discount?: InvoiceDiscount | null): { subtotal: number; discount: number; total: number } {
+  const subtotal = sumLines(lines);
+  let off = 0;
+  if (discount && discount.value > 0 && subtotal > 0) {
+    off = discount.kind === "percent" ? round2((subtotal * Math.min(discount.value, 100)) / 100) : Math.min(round2(discount.value), subtotal);
+  }
+  return { subtotal, discount: off, total: round2(Math.max(subtotal - off, 0)) };
+}
+
+/** "Discount (10%)" or "Discount". */
+export function discountLabel(d: InvoiceDiscount): string {
+  return d.kind === "percent" ? `Discount (${round2(d.value)}%)` : "Discount";
+}
+
 /** "$2,494.99" — always two decimals, US grouping. */
 export function fmtMoney(n: number): string {
   const v = round2(n);
@@ -148,6 +176,49 @@ export function cardFee(base: number, percent: number): number {
 /** Only credit cards carry the surcharge; debit, prepaid and unknown never do. */
 export function feeAppliesTo(funding: string | null | undefined): boolean {
   return funding === "credit";
+}
+
+export interface CardFeeWording {
+  /** Line under the amount in the pay box. */
+  hint: string;
+  /** The fee line in the pay box's review step. */
+  label: string;
+  /** The invoice page's note, given this invoice's fee in dollars. */
+  note: (fee: string) => string;
+  /** PDF pay-box clauses (it breaks between them when one line is too narrow). */
+  pdf: (fee: string) => string[];
+}
+
+/**
+ * What the page, pay box and PDF say about the card fee. `allCards` = every card pays it,
+ * debit too; otherwise credit cards only. "Not more than our cost" is only claimed at or
+ * under 2.9% (DH's Stripe cost is 2.9% + 30¢).
+ */
+export function cardFeeWording(percent: number, allCards: boolean): CardFeeWording {
+  const p = `${round2(percent)}%`;
+  if (allCards) {
+    return {
+      hint: `Card payments add a ${p} card processing fee.`,
+      label: `Card processing fee (${p})`,
+      note: (fee) => `Paying by card adds a ${p} card processing fee (${fee}). You’ll see the exact total before you confirm.`,
+      pdf: (fee) => [`Card payments add a ${p} processing fee (${fee}).`],
+    };
+  }
+  if (percent <= 2.9) {
+    return {
+      hint: `Credit cards add our ${p} surcharge (not more than our cost). Debit and prepaid cards pay none.`,
+      label: `Credit card surcharge (${p})`,
+      note: (fee) =>
+        `Paying by credit card adds our ${p} credit card surcharge (${fee}), which is not more than our cost of accepting credit cards. Debit and prepaid cards pay no surcharge. You’ll see the exact total before you confirm.`,
+      pdf: (fee) => [`Credit cards add our ${p} surcharge (${fee}), not more than our cost;`, "debit and prepaid cards pay none."],
+    };
+  }
+  return {
+    hint: `Credit cards add a ${p} card processing fee. Debit and prepaid cards pay none.`,
+    label: `Credit card fee (${p})`,
+    note: (fee) => `Paying by credit card adds a ${p} card processing fee (${fee}). Debit and prepaid cards pay no fee. You’ll see the exact total before you confirm.`,
+    pdf: (fee) => [`Paying by credit card adds a ${p} card fee (${fee});`, "debit and prepaid cards pay none."],
+  };
 }
 
 export interface RecurringGroup {

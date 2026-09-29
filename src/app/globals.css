@@ -547,10 +547,63 @@ main.content {
   }
   /* invoice draft line: service fields on their own row, then type · amount · remove */
   .draft-line {
-    grid-template-columns: minmax(0, 1fr) 120px 36px !important;
+    grid-template-columns: minmax(0, 1fr) 136px 36px !important;
   }
   .draft-line > :first-child {
     grid-column: 1 / -1;
+  }
+  /* "then $___/mo" stays on one line under the amount */
+  .draft-then {
+    white-space: nowrap;
+  }
+  .draft-then input {
+    width: 66px !important;
+  }
+  /* invoice rows: three even, thumb-sized buttons */
+  .inv-actions > * {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .inv-actions .btn {
+    width: 100%;
+    min-height: 44px !important;
+    justify-content: center;
+  }
+  /* the row's second line (paid date · monthly start) wraps instead of cutting off */
+  .inv-sub {
+    white-space: normal !important;
+    overflow: visible !important;
+  }
+  .inv-menu [role="menuitem"] {
+    display: flex !important;
+    align-items: center;
+    min-height: 44px;
+    white-space: nowrap;
+  }
+  /* long drafts: Discard / Create stay in reach at the bottom of the screen */
+  .draft-actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 4;
+    margin: 0 -18px -18px;
+    padding: 10px 18px calc(10px + env(safe-area-inset-bottom));
+    background: var(--color-card);
+    border-top: 1px solid var(--color-border);
+    border-radius: 0 0 var(--radius-card) var(--radius-card);
+    box-shadow: 0 -10px 24px -18px rgba(58, 42, 54, 0.45);
+  }
+}
+/* iOS zooms into any field under 16px when it's focused */
+@media (max-width: 767px) {
+  .input {
+    font-size: 16px !important;
+  }
+}
+/* clip, not hidden: `hidden` makes <body> a scroll container, which stops position: sticky */
+@media (max-width: 979px) {
+  html,
+  body {
+    overflow-x: clip;
   }
 }
 

@@ -206,19 +206,25 @@ Browser UI uses same-origin `GET/POST /api/state` (session cookie, or `Authoriza
 - **Public link** `/i/<24-char random id>` is outside the login gate (`proxy.ts`), as are
   `/api/public/invoices/<id>/{pdf,quote,pay,finalize}`; the id is the credential. Pages send
   `noindex` + `Referrer-Policy: no-referrer`. The public page never exposes storage URLs.
-- **Credit-card surcharge — OFF by default.** `INVOICE_CARD_FEE_PERCENT` switches it on (capped at
-  **2.9%**: DH's Stripe cost is 2.9% + 30¢ on every card, and Visa caps a surcharge at the lower of the
-  merchant's average cost and 3%). It applies **only to credit cards** — debit and prepaid never
-  (card-network rules). The page reads the card's funding type from a Stripe ConfirmationToken and
-  shows the exact total before the customer confirms; the server recomputes the amount (the browser
-  never sets it). An invoice saved with a higher fee pays the ceiling in force, so nothing is
-  surcharged while the switch is off, and no fee text is shown anywhere. **Before switching it on:**
-  (1) send Stripe written notice and wait 30 days (Visa Rules 5.5.1.5 — no surcharge *or announcement*
-  before then); (2) pass the surcharge in Stripe's `amount_details[surcharge]` field (preview API,
-  `Stripe-Version: 2026-03-25.preview`); (3) decide on Amex (its rules clash with the debit ban);
-  (4) don't surcharge clients in CT, MA, ME or PR; (5) decide whether monthly renewals carry it too
-  (today they bill the plain price).
-- **Monthly / yearly lines → Stripe subscription.** A line marked *Then monthly/yearly* bills its
+- **Card fee — two switches, OFF by default.** `INVOICE_CARD_FEE_PERCENT` sets it (max **3%**);
+  `INVOICE_CARD_FEE_CARDS=all` puts it on **every card, debit and prepaid included** — otherwise only
+  credit cards pay it. The page reads the card's funding type from a Stripe ConfirmationToken and shows
+  the exact total before the customer confirms; the server recomputes the amount (the browser never
+  sets it). An invoice saved with a higher fee pays the ceiling in force; with the fee off, no fee text
+  shows anywhere. The wording claims "not more than our cost" only at ≤ 2.9% (DH's Stripe cost is
+  2.9% + 30¢). **Card-network rules** (checked 2026-09-28): debit/prepaid may never be surcharged; a
+  surcharge needs 30 days' written notice to Stripe before the first one *or its announcement* (Visa
+  5.5.1.5); Visa caps it at the lower of average cost and 3%; CT, MA, ME, PR ban surcharges. The
+  compliant setup is credit-only at 2.9% after the notice — plus Stripe's `amount_details[surcharge]`
+  field (preview API `2026-03-25.preview`) and an Amex decision. Monthly renewals bill the plain price.
+- **Discount:** the draft/edit view takes a percent or dollar discount off the lines. It lowers
+  today's total (and so the card fee); the page and PDF show Subtotal · Discount · Total. Subscription
+  renewals keep each line's own "then $___/mo" price.
+- **Phones:** below 980px the pay page adds a pay button that follows the reader and parks above the
+  pay box; card fields are 16px (no iOS focus zoom); tap targets are 44px. On the dashboard, fields
+  are 16px, row buttons 44px, and a long draft keeps Discard/Create pinned to the bottom. All phone
+  rules are media-query scoped — desktop layout is unchanged (verified box-by-box).
+- **Monthly / yearly lines → Stripe subscription.** A line set to *Monthly/Yearly* bills its
   first period on the invoice. When the client pays, the Payment Element saves the card
   (`setup_future_usage=off_session`) to their Stripe customer (the newest one with the invoice's
   email, else a new one), and once the invoice is paid `ensureSubscriptions` starts a subscription for
@@ -248,8 +254,9 @@ Env vars (Vercel → Settings → Environment Variables, then redeploy):
 - `STRIPE_PUBLISHABLE_KEY` — matching publishable key (`pk_live_…`). **Without it the pay box stays
   off** and the page asks the client to email/call instead. Test keys (`sk_test_`/`pk_test_`) put the
   page in a clearly labelled test mode.
-- `INVOICE_CARD_FEE_PERCENT` — the credit-card surcharge; **unset = off**. Max `2.9`. Only set it
-  after the 30-day Stripe notice (see *Credit-card surcharge* above).
+- `INVOICE_CARD_FEE_PERCENT` — the card fee; **unset = off**. Max `3`.
+- `INVOICE_CARD_FEE_CARDS` — `all` = every card pays the fee (debit too); unset = credit cards only.
+  See *Card fee* above for the card-network rules.
 - `INVOICE_FROM_EMAIL`, `INVOICE_FROM_PHONE` — optional; default to the contact line on DH proposals
 - `INVOICE_PUBLIC_ORIGIN` — e.g. `https://pay.digitalhorizon.dev` (a CNAME to this project);
   share links otherwise use the host the board is opened on

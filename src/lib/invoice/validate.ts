@@ -1,5 +1,5 @@
 import { PROPOSALS_PREFIX, type InvoiceInput } from "./store";
-import { round2, type InvoiceLine, type InvoiceParty } from "./types";
+import { fmtMoney, invoiceTotals, round2, sumLines, type InvoiceDiscount, type InvoiceLine, type InvoiceParty } from "./types";
 
 /**
  * Everything the dashboard posts to create or edit an invoice passes through here:
@@ -10,18 +10,26 @@ import { round2, type InvoiceLine, type InvoiceParty } from "./types";
 export class InvoiceInputError extends Error {}
 
 /**
- * The most a credit-card surcharge can ever be here. Digital Horizon's Stripe cost is
- * 2.9% + 30¢ on every card, so a flat 2.9% never exceeds its real cost — Visa caps a
- * surcharge at the lower of the merchant's average cost and 3%, Mastercard at its cost.
+ * The most a card fee can ever be here: Visa's hard cap. Digital Horizon's Stripe cost is
+ * 2.9% + 30¢ on every card, so only up to 2.9% is at-or-under cost on every charge — the
+ * page claims "not more than our cost" only then (see `cardFeeWording`).
  */
-export const MAX_CARD_FEE_PERCENT = 2.9;
+export const MAX_CARD_FEE_PERCENT = 3;
 
 /**
- * The credit-card surcharge in force: INVOICE_CARD_FEE_PERCENT, capped at 2.9%, and 0 —
- * surcharging OFF — when unset. Visa requires 30 days' written notice to Stripe before the
- * first surcharge (or before announcing one), so leave it unset until that notice has run.
- * It is the default for new invoices, the most an invoice may carry, and a cap on what an
- * existing invoice charges (an invoice saved with a higher fee pays this one).
+ * Which cards pay the fee. Card-network rules allow a surcharge on credit cards only, so that
+ * is the default; INVOICE_CARD_FEE_CARDS=all charges every card, debit and prepaid included
+ * (Brandon's call, 2026-09-29, knowing it breaks those rules).
+ */
+export function cardFeeAllCards(): boolean {
+  return (process.env.INVOICE_CARD_FEE_CARDS || "").trim().toLowerCase() === "all";
+}
+
+/**
+ * The card fee in force: INVOICE_CARD_FEE_PERCENT, capped at 3%, and 0 — fee OFF — when
+ * unset. (Visa requires 30 days' written notice to Stripe before the first surcharge or its
+ * announcement; see README.) It is the default for new invoices, the most an invoice may
+ * carry, and a cap on what an existing invoice charges (one saved higher pays this one).
  */
 export function cardFeeCeiling(): number {
   const n = Number(process.env.INVOICE_CARD_FEE_PERCENT ?? 0);
@@ -76,6 +84,20 @@ function line(v: unknown, i: number): InvoiceLine {
   };
 }
 
+/** `{ kind: "percent" | "amount", value }` → a discount, or undefined for none / zero. */
+function discount(v: unknown, subtotal: number): InvoiceDiscount | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  const kind = o.kind === "percent" || o.kind === "amount" ? o.kind : null;
+  if (!kind) return undefined;
+  const value = typeof o.value === "number" ? o.value : Number(String(o.value ?? "").replace(/[$%,\s]/g, ""));
+  if (!Number.isFinite(value) || value < 0) throw new InvoiceInputError("Discount: enter a number, 0 or more.");
+  if (value === 0) return undefined;
+  if (kind === "percent" && value > 100) throw new InvoiceInputError("Discount: a percent can't be over 100%.");
+  if (kind === "amount" && round2(value) > subtotal) throw new InvoiceInputError(`Discount: it can't be more than the lines' ${fmtMoney(subtotal)}.`);
+  return { kind, value: round2(value) };
+}
+
 export function validateInvoiceInput(raw: unknown): InvoiceInput {
   const o = (raw ?? {}) as Record<string, unknown>;
   const lines = Array.isArray(o.lines) ? o.lines.slice(0, 101) : [];
@@ -83,6 +105,8 @@ export function validateInvoiceInput(raw: unknown): InvoiceInput {
   if (lines.length > 100) throw new InvoiceInputError("An invoice can have at most 100 lines.");
   const parsedLines = lines.map(line);
   if (!parsedLines.some((l) => l.amount > 0)) throw new InvoiceInputError("The invoice total is $0 — add an amount to at least one line.");
+  const disc = discount(o.discount, sumLines(parsedLines));
+  if (disc && invoiceTotals(parsedLines, disc).total <= 0) throw new InvoiceInputError("The discount takes the total to $0 — lower it.");
   const issueDate = ymd(o.issueDate);
   if (!issueDate) throw new InvoiceInputError("Issue date is required.");
   const dueDate = ymd(o.dueDate);
@@ -105,6 +129,8 @@ export function validateInvoiceInput(raw: unknown): InvoiceInput {
     client: party(o.client),
     project: str(o.project, 2000),
     lines: parsedLines,
+    // Always present (undefined = none), so an edit that removes the discount clears it.
+    discount: disc,
     cardFeePercent: Math.round(fee * 100) / 100,
     notes: str(o.notes, 1000),
     ...(source ? { source } : {}),

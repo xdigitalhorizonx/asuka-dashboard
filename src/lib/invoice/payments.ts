@@ -2,7 +2,7 @@ import { createHash } from "crypto";
 import Stripe from "stripe";
 import { recordInvoiceTransaction } from "./customers";
 import { getInvoiceWithIntents, recordPayment, recordPaymentIntent, recordSubscription, type PaymentIntentRecord } from "./store";
-import { effectiveCardFeePercent } from "./validate";
+import { cardFeeAllCards, effectiveCardFeePercent } from "./validate";
 import {
   cardFee,
   feeAppliesTo,
@@ -130,7 +130,7 @@ async function readCard(inv: Invoice, confirmationTokenId: string) {
 export function quoteFor(inv: Invoice, funding: string): Pick<CardQuote, "base" | "fee" | "total" | "feePercent"> {
   const base = inv.balance;
   const pct = effectiveCardFeePercent(inv);
-  const fee = feeAppliesTo(funding) ? cardFee(base, pct) : 0;
+  const fee = cardFeeAllCards() || feeAppliesTo(funding) ? cardFee(base, pct) : 0;
   return { base, fee, total: round2(base + fee), feePercent: fee > 0 ? pct : 0 };
 }
 

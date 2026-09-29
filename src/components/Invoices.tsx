@@ -5,7 +5,7 @@ import { tint, localToday } from "@/lib/crm";
 import { haptic } from "@/lib/haptics";
 import type { PaymentsStatus } from "@/lib/invoice/payments";
 import type { InvoiceInput } from "@/lib/invoice/store";
-import { cardFee, fmtMoney, localYmd, recurringGroups, round2, type Invoice, type InvoiceLine, type RecurringInterval } from "@/lib/invoice/types";
+import { cardFee, fmtMoney, invoiceTotals, localYmd, recurringGroups, round2, type Invoice, type InvoiceDiscount, type InvoiceLine, type RecurringInterval } from "@/lib/invoice/types";
 import { Icon } from "./icons";
 
 /**
@@ -22,6 +22,8 @@ type Payload = {
   cardFeeDefault: number;
   /** The surcharge ceiling in force (0 = surcharging off). */
   cardFeeMax: number;
+  /** Every card pays the fee (debit too), not only credit cards. */
+  cardFeeAllCards: boolean;
   origin: string;
   storage: string;
   error?: string;
@@ -29,7 +31,8 @@ type Payload = {
 
 /** `recurringText` is the "then $___ per period" price the subscription bills after this invoice. */
 type EditLine = InvoiceLine & { amountText: string; recurringText: string };
-type Draft = Omit<InvoiceInput, "lines"> & { lines: EditLine[] };
+/** `discountText` / `discountKind` edit the invoice discount ("" = none). */
+type Draft = Omit<InvoiceInput, "lines" | "discount"> & { lines: EditLine[]; discountText: string; discountKind: InvoiceDiscount["kind"] };
 const PER: Record<RecurringInterval, string> = { month: "mo", year: "yr" };
 
 /** Paid, has recurring lines, but not every interval has its subscription yet. */
@@ -56,8 +59,14 @@ function parseAmount(t: string): number {
   const n = Number(String(t).replace(/[$,\s]/g, ""));
   return Number.isFinite(n) && n >= 0 ? round2(n) : NaN;
 }
-function draftTotal(d: Draft): number {
-  return round2(d.lines.reduce((s, l) => s + (Number.isFinite(parseAmount(l.amountText)) ? parseAmount(l.amountText) : 0), 0));
+function draftDiscount(d: Draft): InvoiceDiscount | undefined {
+  const v = parseAmount(d.discountText.replace(/%/g, ""));
+  return Number.isFinite(v) && v > 0 ? { kind: d.discountKind, value: v } : undefined;
+}
+/** The draft's line sum, discount in dollars, and total — the same math the server saves. */
+function draftSums(d: Draft) {
+  const lines = d.lines.map((l) => ({ amount: Number.isFinite(parseAmount(l.amountText)) ? parseAmount(l.amountText) : 0 }));
+  return invoiceTotals(lines, draftDiscount(d));
 }
 /** Keep the proposal-style line note ("First month · then $94.99/mo") in step with the repeat price. */
 function syncNote(l: EditLine, interval: RecurringInterval | null, priceText: string): string {
@@ -75,6 +84,8 @@ function blankDraft(fee: number): Draft {
     lines: toEdit([{ id: "l1", name: "", description: "", type: "One-Time", recurring: null, amount: 0, zeroLabel: "", note: "" }]),
     cardFeePercent: fee,
     notes: "",
+    discountText: "",
+    discountKind: "percent",
   };
 }
 function addDays(ymd: string, n: number): string {
@@ -163,6 +174,7 @@ export function Invoices() {
   const linkFor = (inv: Invoice) => `${origin}/i/${inv.id}`;
   const feeDefault = data?.cardFeeDefault ?? 0;
   const feeMax = data?.cardFeeMax ?? 0;
+  const feeAllCards = data?.cardFeeAllCards ?? false;
 
   async function readProposal(file: File) {
     setFormError(null);
@@ -185,7 +197,12 @@ export function Invoices() {
     }
     const d = r.data.draft;
     setParseInfo({ ok: r.data.ok, reason: r.data.reason, warnings: r.data.warnings || [], match: r.data.match ?? null, proposal: r.data.proposal });
-    setDraft({ ...d, lines: d.lines.length ? toEdit(d.lines) : blankDraft(feeDefault).lines });
+    setDraft({
+      ...d,
+      lines: d.lines.length ? toEdit(d.lines) : blankDraft(feeDefault).lines,
+      discountText: d.discount ? String(d.discount.value) : "",
+      discountKind: d.discount?.kind ?? "percent",
+    });
     haptic("tap");
   }
 
@@ -202,8 +219,19 @@ export function Invoices() {
     setParseInfo(null);
     setFormError(null);
     setEditing(inv);
-    const { issueDate, dueDate, client, project, lines, cardFeePercent, notes, source } = inv;
-    setDraft({ issueDate, dueDate, client, project, lines: toEdit(lines), cardFeePercent: Math.min(cardFeePercent, feeMax), notes, ...(source ? { source } : {}) });
+    const { issueDate, dueDate, client, project, lines, cardFeePercent, notes, source, discount } = inv;
+    setDraft({
+      issueDate,
+      dueDate,
+      client,
+      project,
+      lines: toEdit(lines),
+      cardFeePercent: Math.min(cardFeePercent, feeMax),
+      notes,
+      ...(source ? { source } : {}),
+      discountText: discount ? String(discount.value) : "",
+      discountKind: discount?.kind ?? "percent",
+    });
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -224,7 +252,12 @@ export function Invoices() {
       delete rest.recurringText;
       lines.push({ ...(rest as InvoiceLine), amount, recurring, zeroLabel: amount === 0 ? l.zeroLabel || "Included" : "" });
     }
-    return { ...d, lines };
+    const dText = d.discountText.trim().replace(/%/g, "");
+    if (dText && !Number.isFinite(parseAmount(dText))) return `Discount: "${d.discountText}" isn't a number.`;
+    const payload: Partial<Draft> = { ...d };
+    delete payload.discountText;
+    delete payload.discountKind;
+    return { ...(payload as Omit<Draft, "discountText" | "discountKind">), lines, discount: draftDiscount(d) };
   }
 
   async function save() {
@@ -461,6 +494,7 @@ export function Invoices() {
           info={parseInfo}
           editing={editing}
           feeMax={feeMax}
+          feeAllCards={feeAllCards}
           busy={busy === "save"}
           error={formError}
           onSave={save}
@@ -512,7 +546,7 @@ export function Invoices() {
                 </span>
                 <span style={{ minWidth: 0 }}>
                   <span style={{ display: "block", fontWeight: 500, ...ellipsis }}>{inv.client.name || "—"}</span>
-                  <span style={{ display: "block", fontSize: 12, color: "var(--color-muted)", ...ellipsis }}>
+                  <span className="inv-sub" style={{ display: "block", fontSize: 12, color: "var(--color-muted)", ...ellipsis }}>
                     <span className="only-sm">
                       {inv.number} · <span style={{ color: st.color, fontWeight: 600 }}>{st.label}</span> ·{" "}
                     </span>
@@ -556,7 +590,7 @@ export function Invoices() {
                 </span>
               </div>
               {/* phones: actions on their own line */}
-              <div className="show-sm" style={{ display: "none", gap: 6, padding: "0 14px 12px", flexWrap: "wrap" }}>
+              <div className="show-sm inv-actions" style={{ display: "none", gap: 6, padding: "0 14px 12px", flexWrap: "wrap" }}>
                 {inv.status !== "void" && (
                   <button type="button" className="btn" onClick={() => copy(inv)} style={{ minHeight: 32, padding: "6px 10px" }}>
                     Copy link
@@ -617,7 +651,7 @@ function RowMenu({ inv, busy, onEdit, onAct, mailto }: { inv: Invoice; busy: boo
       {open && (
         <div
           role="menu"
-          className="card"
+          className="card inv-menu"
           style={{ position: "absolute", right: 0, ...(up ? { bottom: "calc(100% + 6px)" } : { top: "calc(100% + 6px)" }), zIndex: 20, minWidth: 190, padding: 6, boxShadow: "0 12px 30px -12px rgba(58,42,54,0.35)" }}
           onClick={() => setOpen(false)}
         >
@@ -681,6 +715,7 @@ function DraftEditor({
   info,
   editing,
   feeMax,
+  feeAllCards,
   busy,
   error,
   onSave,
@@ -691,18 +726,20 @@ function DraftEditor({
   info: ParseInfo | null;
   editing: Invoice | null;
   feeMax: number;
+  feeAllCards: boolean;
   busy: boolean;
   error: string | null;
   onSave: () => void;
   onCancel: () => void;
 }) {
-  const total = draftTotal(draft);
+  const sums = draftSums(draft);
+  const total = sums.total;
   const fee = cardFee(total, Math.min(draft.cardFeePercent, feeMax));
   const repeats = recurringGroups(draft.lines.map((l) => ({ ...l, recurring: l.recurring ? { interval: l.recurring.interval, amount: parseAmount(l.recurringText) || 0 } : null })));
   const set = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
   const setClient = (k: keyof Draft["client"], v: string) => set({ client: { ...draft.client, [k]: v } });
   const setLine = (i: number, patch: Partial<EditLine>) => set({ lines: draft.lines.map((l, j) => (j === i ? { ...l, ...patch } : l)) });
-  const totalsMatch = info?.proposal?.totals.initial != null && round2(info.proposal.totals.initial) === total;
+  const totalsMatch = info?.proposal?.totals.initial != null && round2(info.proposal.totals.initial) === sums.subtotal;
 
   return (
     <section className="card" style={{ padding: 18, display: "grid", gap: 14, boxShadow: `inset 0 2px 0 0 ${tint(HUE, 70)}` }} aria-label="Invoice draft">
@@ -814,8 +851,8 @@ function DraftEditor({
                   style={{ fontSize: 13, padding: "6px 8px" }}
                 >
                   <option value="">One-time</option>
-                  <option value="month">Then monthly</option>
-                  <option value="year">Then yearly</option>
+                  <option value="month">Monthly</option>
+                  <option value="year">Yearly</option>
                 </select>
               </div>
               <div style={{ display: "grid", gap: 4 }}>
@@ -833,7 +870,7 @@ function DraftEditor({
                 />
                 {parseAmount(l.amountText) === 0 && <span style={{ fontSize: 12, color: "var(--color-muted)", textAlign: "right" }}>shows “{l.zeroLabel || "Included"}”</span>}
                 {l.recurring && (
-                  <label style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4, fontSize: 12, color: "var(--color-muted)" }}>
+                  <label className="draft-then" style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4, fontSize: 12, color: "var(--color-muted)" }}>
                     then $
                     <input
                       className="input money"
@@ -868,8 +905,46 @@ function DraftEditor({
       </div>
 
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end", justifyContent: "space-between" }}>
+        <div style={{ display: "grid", gap: 4 }} className="draft-discount">
+          <span className="label" id="discount-label">
+            Discount
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            <input
+              className="input"
+              inputMode="decimal"
+              placeholder="0"
+              value={draft.discountText}
+              onChange={(e) => set({ discountText: e.target.value })}
+              onBlur={() => {
+                const v = parseAmount(draft.discountText.replace(/%/g, ""));
+                if (Number.isFinite(v)) set({ discountText: v > 0 ? String(v) : "" });
+              }}
+              style={{ width: 90 }}
+              aria-labelledby="discount-label"
+            />
+            <span role="group" aria-label="Discount in percent or dollars" style={{ display: "inline-flex", gap: 4 }}>
+              {(["percent", "amount"] as const).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  className={`btn${draft.discountKind === k ? " btn-primary" : ""}`}
+                  aria-pressed={draft.discountKind === k}
+                  aria-label={k === "percent" ? "Percent off" : "Dollars off"}
+                  onClick={() => set({ discountKind: k })}
+                  style={{ minHeight: 36, minWidth: 40, padding: "6px 10px" }}
+                >
+                  {k === "percent" ? "%" : "$"}
+                </button>
+              ))}
+            </span>
+            <span style={{ fontSize: 14, color: "var(--color-muted)" }}>
+              {sums.discount > 0 ? `−${fmtMoney(sums.discount)} off today’s total` : "Optional · this invoice only, not the monthly price"}
+            </span>
+          </span>
+        </div>
         <label style={{ display: "grid", gap: 4 }}>
-          <span className="label">Credit-card surcharge</span>
+          <span className="label">Card fee</span>
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <input
               className="input"
@@ -885,7 +960,7 @@ function DraftEditor({
             />
             <span style={{ fontSize: 14, color: "var(--color-muted)" }}>
               {feeMax > 0
-                ? `% · credit cards only, never debit/prepaid · max ${feeMax}%`
+                ? `% · ${feeAllCards ? "every card, debit too" : "credit cards only, never debit/prepaid"} · max ${feeMax}%`
                 : "% · off until the 30-day Stripe surcharge notice has run (INVOICE_CARD_FEE_PERCENT)"}
             </span>
           </span>
@@ -895,7 +970,16 @@ function DraftEditor({
           <div className="total" style={{ color: HUE }}>
             {fmtMoney(total)}
           </div>
-          {fee > 0 && <div style={{ fontSize: 13, color: "var(--color-muted)" }}>Credit card: {fmtMoney(total + fee)} (incl. {fmtMoney(fee)} surcharge)</div>}
+          {sums.discount > 0 && (
+            <div style={{ fontSize: 13, color: "var(--color-muted)" }}>
+              {fmtMoney(sums.subtotal)} − {fmtMoney(sums.discount)} discount
+            </div>
+          )}
+          {fee > 0 && (
+            <div style={{ fontSize: 13, color: "var(--color-muted)" }}>
+              {feeAllCards ? "By card" : "Credit card"}: {fmtMoney(total + fee)} (incl. {fmtMoney(fee)} card fee)
+            </div>
+          )}
           {repeats.length > 0 && (
             <div style={{ fontSize: 13, color: "var(--color-muted)", maxWidth: 320, marginLeft: "auto" }}>
               Then {repeats.map((g) => `${fmtMoney(g.amount)}/${PER[g.interval]}`).join(" + ")} — a Stripe subscription on the client&rsquo;s card starts when they pay.
@@ -920,7 +1004,7 @@ function DraftEditor({
         </p>
       )}
 
-      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+      <div className="draft-actions" style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
         <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={busy}>
           {editing ? "Cancel" : "Discard"}
         </button>

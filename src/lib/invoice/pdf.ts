@@ -23,14 +23,16 @@ import {
   type PDFPage,
 } from "pdf-lib";
 import type { Seller } from "./seller";
-import { effectiveCardFeePercent } from "./validate";
+import { cardFeeAllCards, effectiveCardFeePercent } from "./validate";
 import {
   cardFee,
+  cardFeeWording,
+  discountLabel,
   fmtLongDate,
   fmtMoney,
+  invoiceTotals,
   recurringGroups,
   round2,
-  sumLines,
   type Invoice,
   type InvoiceLine,
   type InvoicePayment,
@@ -905,9 +907,11 @@ class InvoiceLayout {
       ...(isVoid ? wrap("This invoice was voided. No payment is due.", s.fineNote, noteW) : []),
     ];
     const hasPaid = (inv.payments ?? []).length > 0;
+    const sums = invoiceTotals(inv.lines ?? [], inv.discount);
+    const hasDiscount = !!inv.discount && sums.discount > 0;
     const rowH = 16.5;
     const bandH = 30;
-    const height = 2 * rowH + 7 + (hasPaid ? rowH : 0) + 8 + bandH + (notes.length ? 7 + notes.length * 10 : 0);
+    const height = 2 * rowH + 7 + (hasDiscount ? rowH : 0) + (hasPaid ? rowH : 0) + 8 + bandH + (notes.length ? 7 + notes.length * 10 : 0);
     return {
       height,
       draw: (top) => {
@@ -917,7 +921,8 @@ class InvoiceLayout {
           this.text(value, AMT_R, baselineIn(y, rowH, vs.size), vs, "right");
           y -= rowH;
         };
-        row("Subtotal", fmtMoney(sumLines(inv.lines ?? [])), s.totLabel, s.totValue);
+        row("Subtotal", fmtMoney(sums.subtotal), s.totLabel, s.totValue);
+        if (hasDiscount && inv.discount) row(discountLabel(inv.discount), fmtMoney(-sums.discount), s.totLabel, s.totValue);
         hairline(this.page, labelX, AMT_R, y - 3.5);
         y -= 7;
         row("Total", fmtMoney(inv.total), s.totalLabel, s.totalValue);
@@ -953,7 +958,7 @@ class InvoiceLayout {
     const url = this.url;
     // One sentence; when it does not fit on one line it breaks after the semicolon.
     const fee = fmtMoney(cardFee(inv.balance, pct));
-    const feeClauses = pct > 0 ? [`Credit cards add our ${round2(pct)}% surcharge (${fee}), not more than our cost;`, "debit and prepaid cards pay none."] : [];
+    const feeClauses = pct > 0 ? cardFeeWording(pct, cardFeeAllCards()).pdf(fee) : [];
     const feeSentence = feeClauses.join(" ");
     const feeLines =
       measure(feeSentence, s.payText) <= innerW

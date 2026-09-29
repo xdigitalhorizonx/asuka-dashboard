@@ -6,8 +6,8 @@ import { DhMark } from "@/components/DhLogo";
 import { seller } from "@/lib/invoice/seller";
 import { paymentsStatus, reconcileInvoice, stripePublishableKey } from "@/lib/invoice/payments";
 import { getInvoiceWithIntents, isInvoiceId } from "@/lib/invoice/store";
-import { effectiveCardFeePercent } from "@/lib/invoice/validate";
-import { addPeriod, cardFee, fmtLongDate, fmtMoney, localYmd, recurringGroups, type Invoice } from "@/lib/invoice/types";
+import { cardFeeAllCards, effectiveCardFeePercent } from "@/lib/invoice/validate";
+import { addPeriod, cardFee, cardFeeWording, discountLabel, fmtLongDate, fmtMoney, invoiceTotals, localYmd, recurringGroups, round2, type Invoice } from "@/lib/invoice/types";
 import { PayBox } from "./PayBox";
 import s from "../invoice.module.css";
 
@@ -55,8 +55,10 @@ export default async function InvoicePage({ params }: Props) {
   const me = seller();
   const pay = paymentsStatus();
   const open = inv.status === "open";
+  const totals = invoiceTotals(inv.lines, inv.discount);
   const feePct = effectiveCardFeePercent(inv);
-  const feeCredit = cardFee(inv.balance, feePct);
+  const feeAllCards = cardFeeAllCards();
+  const feeCard = cardFee(inv.balance, feePct);
   const dueText = inv.dueDate ? `Due ${fmtLongDate(inv.dueDate)}` : "Due on receipt";
   const pdfHref = `/api/public/invoices/${inv.id}/pdf`;
   // The renewal date is fixed here (Digital Horizon's calendar), not in the browser: the pay box
@@ -189,6 +191,18 @@ export default async function InvoicePage({ params }: Props) {
             </div>
 
             <div className={s.totals}>
+              {inv.discount && totals.discount > 0 && (
+                <>
+                  <div className={s.totalRow}>
+                    <span>Subtotal</span>
+                    <strong>{fmtMoney(totals.subtotal)}</strong>
+                  </div>
+                  <div className={s.totalRow}>
+                    <span>{discountLabel(inv.discount)}</span>
+                    <strong>−{fmtMoney(totals.discount)}</strong>
+                  </div>
+                </>
+              )}
               <div className={s.totalRow}>
                 <span>Total</span>
                 <strong>{fmtMoney(inv.total)}</strong>
@@ -205,12 +219,7 @@ export default async function InvoicePage({ params }: Props) {
               </div>
             </div>
 
-            {open && feePct > 0 && (
-              <p className={s.feeNote}>
-                Paying by credit card adds our {feePct}% credit card surcharge ({fmtMoney(feeCredit)}), which is not more than our cost of accepting credit
-                cards. Debit and prepaid cards pay no surcharge. You&rsquo;ll see the exact total before you confirm.
-              </p>
-            )}
+            {open && feePct > 0 && <p className={s.feeNote}>{cardFeeWording(feePct, feeAllCards).note(fmtMoney(feeCard))}</p>}
             {open && recurring.length > 0 && (
               <p className={s.feeNote}>
                 This invoice covers the first {recurring.map((g) => per(g.interval)).join(" and ")}. After that,{" "}
@@ -264,6 +273,14 @@ export default async function InvoicePage({ params }: Props) {
                 Questions? <a href={`mailto:${me.email}`}>{me.email}</a> · <a href={`tel:${me.phone.replace(/[^\d+]/g, "")}`}>{me.phone}</a>
               </span>
             </footer>
+
+            {/* Phones/tablets only (CSS): follows the reader, then parks here above the pay box. */}
+            {open && pay.ready && (
+              <a className={s.stickyPay} href="#pay">
+                {feePct === 0 || feeAllCards ? `Pay ${fmtMoney(round2(inv.balance + (feePct > 0 ? feeCard : 0)))} by card` : "Pay by card"}
+                <span aria-hidden="true">↓</span>
+              </a>
+            )}
           </div>
         </main>
 
@@ -275,6 +292,7 @@ export default async function InvoicePage({ params }: Props) {
                 number={inv.number}
                 balance={inv.balance}
                 cardFeePercent={feePct}
+                cardFeeAllCards={feeAllCards}
                 publishableKey={stripePublishableKey()}
                 testMode={pay.mode === "test"}
                 email={inv.client.email}

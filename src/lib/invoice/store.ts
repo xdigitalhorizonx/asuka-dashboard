@@ -8,7 +8,7 @@ import {
   ROOT,
   type StoredObject,
 } from "../blobstore";
-import { deriveInvoice, round2, sumLines, type Invoice, type InvoiceDoc, type InvoicePayment, type InvoiceSubscription } from "./types";
+import { deriveInvoice, invoiceTotals, round2, type Invoice, type InvoiceDoc, type InvoicePayment, type InvoiceSubscription } from "./types";
 
 /**
  * Invoice storage. Nothing is ever overwritten:
@@ -130,7 +130,10 @@ export type InvoiceInput = Omit<InvoiceDoc, "id" | "number" | "version" | "voide
 
 function finalize(input: InvoiceInput): Omit<InvoiceInput, "lines"> & { lines: InvoiceInput["lines"]; total: number } {
   const lines = input.lines.map((l) => ({ ...l, amount: round2(l.amount) }));
-  return { ...input, lines, total: sumLines(lines) };
+  const { discount, ...rest } = input;
+  // An absent or zero discount is dropped from the saved JSON (not stored as undefined/0).
+  const keep = discount && discount.value > 0 ? { discount } : {};
+  return { ...rest, ...keep, lines, total: invoiceTotals(lines, discount).total };
 }
 
 export async function createInvoice(input: InvoiceInput): Promise<Invoice> {
@@ -155,6 +158,7 @@ export async function saveVersion(current: Invoice, next: Partial<InvoiceInput> 
     cardFeePercent: current.cardFeePercent,
     notes: current.notes,
     ...(current.source ? { source: current.source } : {}),
+    ...(current.discount ? { discount: current.discount } : {}),
   };
   const { voided, ...fields } = next;
   const merged = finalize({ ...base, ...fields });

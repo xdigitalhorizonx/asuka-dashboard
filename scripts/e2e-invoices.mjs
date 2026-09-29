@@ -45,6 +45,9 @@ function expectedFee(base, funding) {
   throw new Error(`unknown E2E_FEE_RULE ${FEE_RULE}`);
 }
 
+/** The pay box's fee line in the review step, whatever the rule's wording. */
+const FEE_LINE = /(Credit card surcharge|Credit card fee|Card processing fee) \([\d.]+%\)/;
+
 const results = [];
 function record(name, ok, detail = "") {
   results.push({ name, ok, detail });
@@ -95,15 +98,16 @@ async function api(p, init = {}) {
   return j;
 }
 const getInvoice = async (id) => (await api("/api/invoices")).invoices.find((i) => i.id === id);
-async function createInvoice(name, lines) {
+async function createInvoice(name, lines, extra = {}) {
   const input = {
     issueDate: new Date().toISOString().slice(0, 10),
     dueDate: "",
     client: { name, email: "e2e-client@example.com", phone: "", address: "" },
     project: "E2E test invoice",
     lines,
-    cardFeePercent: FEE_RULE === "none" ? 0 : 2.9,
+    cardFeePercent: FEE_RULE === "none" ? 0 : FEE_RULE === "all3" ? 3 : 2.9,
     notes: "",
+    ...extra,
   };
   const j = await api("/api/invoices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
   return j.invoice;
@@ -256,7 +260,7 @@ await scenario("B · Visa credit 4242 on the uploaded invoice → fee + subscrip
   const renewal = await page.getByTestId("renewal-note").innerText().catch(() => "");
   const rv = await review(page, "4242424242424242");
   const fee = expectedFee(uploaded.total, "credit");
-  must(fee === 0 || /Credit card surcharge \(2\.9%\)/.test(rv), `review shows no surcharge line: ${rv}`);
+  must(fee === 0 || FEE_LINE.test(rv), `review shows no fee line: ${rv}`);
   await page.screenshot({ path: path.join(OUT, "B-review.png"), fullPage: true });
   await page.getByRole("button", { name: /^Pay \$/ }).click();
   await page.getByText(/Payment received|Paid in full/).first().waitFor({ timeout: 60_000 });
@@ -285,7 +289,7 @@ async function simple(name, lines, card, funding) {
     const { ctx, page } = await openPage(browser, `${BASE}/i/${inv.id}`);
     const rv = await review(page, card);
     const fee = expectedFee(inv.total, funding);
-    must(fee > 0 ? /Credit card surcharge \(2\.9%\)/.test(rv) : !/surcharge \(/i.test(rv), `review fee line wrong for ${funding}: ${rv.replace(/\s+/g, " ")}`);
+    must(fee > 0 ? FEE_LINE.test(rv) : !FEE_LINE.test(rv), `review fee line wrong for ${funding}: ${rv.replace(/\s+/g, " ")}`);
     await page.getByRole("button", { name: /^Pay \$/ }).click();
     await page.getByText(/Payment received|Paid in full/).first().waitFor({ timeout: 60_000 });
     await ctx.close();
@@ -295,9 +299,25 @@ async function simple(name, lines, card, funding) {
   });
 }
 
-await simple("C · Visa debit, one-time only → no fee, card not saved", [oneTime("l1", "Logo refresh", 200)], "4000056655665556", "debit");
-await simple("D · Mastercard debit, monthly → no fee + subscription", [oneTime("l1", "Setup", 50), monthly("l2", "Hosting, Technical Maintenance & Security", 94.99)], "5200828282828210", "debit");
-await simple("E · Mastercard prepaid, one-time → no fee", [oneTime("l1", "Photo shoot", 120)], "5105105105105100", "prepaid");
+await simple("C · Visa debit, one-time only → card not saved (fee per rule)", [oneTime("l1", "Logo refresh", 200)], "4000056655665556", "debit");
+await simple("D · Mastercard debit, monthly → subscription (fee per rule)", [oneTime("l1", "Setup", 50), monthly("l2", "Hosting, Technical Maintenance & Security", 94.99)], "5200828282828210", "debit");
+await simple("E · Mastercard prepaid, one-time (fee per rule)", [oneTime("l1", "Photo shoot", 120)], "5105105105105100", "prepaid");
+
+await scenario("K · 10% discount → the page shows it, the card pays the discounted total (+ fee), subscription unchanged", async () => {
+  const inv = await createInvoice("E2E K", [oneTime("l1", "Build", 1000), monthly("l2", "Hosting", 94.99)], { discount: { kind: "percent", value: 10 } });
+  must(inv.total === 985.49, `discounted total ${inv.total} (1,094.99 − 109.50)`);
+  const { ctx, page } = await openPage(browser, `${BASE}/i/${inv.id}`);
+  const text = await page.locator("main").innerText();
+  must(/Subtotal\s*\$1,094\.99/.test(text) && /Discount \(10%\)\s*−\$109\.50/.test(text), "subtotal/discount rows missing on the page");
+  await review(page, "4000056655665556");
+  await page.getByRole("button", { name: /^Pay \$/ }).click();
+  await page.getByText(/Payment received|Paid in full/).first().waitFor({ timeout: 60_000 });
+  await ctx.close();
+  const { p, pi } = await verifyPaid("K", inv, { funding: "debit", recurringCents: 9499 });
+  const pdf = await fetch(`${BASE}/api/public/invoices/${inv.id}/pdf`);
+  must(pdf.ok && (pdf.headers.get("content-type") || "").includes("pdf"), "PDF didn't render");
+  return `charged ${p.amount} (fee ${p.fee}) on ${inv.total} after 10% off · subscription still $94.99/mo · ${await verifyWebhookAndCustomers("K", inv, p, pi)}`;
+});
 
 await scenario("F · declined card → honest error, retry with 4242 succeeds on the same PaymentIntent", async () => {
   const inv = await createInvoice("E2E F", [oneTime("l1", "Setup", 75), monthly("l2", "Hosting", 49.99)]);

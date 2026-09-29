@@ -302,7 +302,7 @@ await check("saved card: the Stripe customer id is kept on the payment and linke
   assert.equal(known[0].stripeCustomerId, "cus_saved", "filled in when the match had none");
 });
 
-await check("surcharge switch: unset = off (nothing charged or allowed), never above 2.9%", () => {
+await check("surcharge switch: unset = off (nothing charged or allowed), never above 3%", () => {
   const keep = process.env.INVOICE_CARD_FEE_PERCENT;
   try {
     delete process.env.INVOICE_CARD_FEE_PERCENT;
@@ -313,12 +313,65 @@ await check("surcharge switch: unset = off (nothing charged or allowed), never a
     assert.deepEqual(quoteFor(inv, "credit"), { base: 2494.99, fee: 0, total: 2494.99, feePercent: 0 }, "a saved fee is not charged while surcharging is off");
     assert.throws(() => validateInvoiceInput({ ...input, cardFeePercent: 1 }), /Card fees are off/);
     assert.equal(validateInvoiceInput({ ...input, cardFeePercent: 0 }).cardFeePercent, 0);
-    for (const [env, want] of [["3", 2.9], ["2.5", 2.5], ["-1", 0], ["abc", 0]] as const) {
+    for (const [env, want] of [["3", 3], ["4", 3], ["2.5", 2.5], ["-1", 0], ["abc", 0]] as const) {
       process.env.INVOICE_CARD_FEE_PERCENT = env;
       assert.equal(cardFeeCeiling(), want, `INVOICE_CARD_FEE_PERCENT=${env}`);
     }
   } finally {
     process.env.INVOICE_CARD_FEE_PERCENT = keep;
+  }
+});
+
+await check("discount: percent or dollars off the lines, validated, saved, cleared by an edit, fee on the discounted total", async () => {
+  assert.deepEqual(types.invoiceTotals(lines, { kind: "percent", value: 10 }), { subtotal: 2494.99, discount: 249.5, total: 2245.49 });
+  assert.deepEqual(types.invoiceTotals(lines, { kind: "amount", value: 500 }), { subtotal: 2494.99, discount: 500, total: 1994.99 });
+  assert.deepEqual(types.invoiceTotals(lines, { kind: "amount", value: 9999 }), { subtotal: 2494.99, discount: 2494.99, total: 0 });
+  assert.deepEqual(types.invoiceTotals(lines), { subtotal: 2494.99, discount: 0, total: 2494.99 });
+  assert.equal(types.discountLabel({ kind: "percent", value: 12.5 }), "Discount (12.5%)");
+
+  const v = (d: unknown) => validateInvoiceInput({ ...input, discount: d });
+  assert.deepEqual(v({ kind: "percent", value: "10%" }).discount, { kind: "percent", value: 10 });
+  assert.deepEqual(v({ kind: "amount", value: "$1,000" }).discount, { kind: "amount", value: 1000 });
+  assert.equal(v({ kind: "amount", value: 0 }).discount, undefined, "0 = no discount");
+  assert.equal(v(null).discount, undefined);
+  const bad = (d: unknown, re: RegExp) => assert.throws(() => v(d), (e: unknown) => e instanceof InvoiceInputError && re.test((e as Error).message));
+  bad({ kind: "percent", value: 150 }, /over 100%/);
+  bad({ kind: "amount", value: 3000 }, /more than the lines' \$2,494\.99/);
+  bad({ kind: "percent", value: -5 }, /0 or more/);
+  bad({ kind: "percent", value: 100 }, /takes the total to \$0/);
+
+  const made = await store.createInvoice(v({ kind: "percent", value: 10 }));
+  assert.equal(made.total, 2245.49);
+  assert.equal(made.balance, 2245.49);
+  assert.deepEqual(made.discount, { kind: "percent", value: 10 });
+  assert.deepEqual(quoteFor(made, "credit"), { base: 2245.49, fee: 65.12, total: 2310.61, feePercent: 2.9 }, "fee on the discounted total");
+  const voided = await store.saveVersion(made, { voided: true }, made.version);
+  assert.deepEqual(voided.discount, { kind: "percent", value: 10 }, "void keeps the discount");
+  const edited = await store.saveVersion(voided, validateInvoiceInput(input), voided.version);
+  assert.equal(edited.discount, undefined, "an edit without a discount clears it");
+  assert.equal(edited.total, 2494.99);
+});
+
+await check("card fee on every card (INVOICE_CARD_FEE_CARDS=all): debit/prepaid/unknown pay it too; wording follows", () => {
+  const keep = { pct: process.env.INVOICE_CARD_FEE_PERCENT, cards: process.env.INVOICE_CARD_FEE_CARDS };
+  try {
+    process.env.INVOICE_CARD_FEE_PERCENT = "3";
+    const inv = types.deriveInvoice({ ...input, cardFeePercent: 3, id: "a".repeat(24), number: "DH-12", version: 1, voided: false, total: 2494.99, createdAt: "", updatedAt: "" }, []);
+    assert.deepEqual(quoteFor(inv, "debit"), { base: 2494.99, fee: 0, total: 2494.99, feePercent: 0 }, "credit-only by default");
+    process.env.INVOICE_CARD_FEE_CARDS = "all";
+    for (const f of ["credit", "debit", "prepaid", "unknown"]) {
+      assert.deepEqual(quoteFor(inv, f), { base: 2494.99, fee: 74.85, total: 2569.84, feePercent: 3 }, f);
+    }
+    const all = types.cardFeeWording(3, true);
+    assert.equal(all.label, "Card processing fee (3%)");
+    assert.match(all.note("$74.85"), /^Paying by card adds a 3% card processing fee \(\$74\.85\)/);
+    assert.doesNotMatch(all.hint + all.note("$1"), /debit|not more than our cost/i);
+    assert.match(types.cardFeeWording(2.9, false).hint, /not more than our cost/, "at cost: claimed");
+    assert.doesNotMatch(types.cardFeeWording(3, false).hint, /not more than our cost/, "3% is over cost on large invoices: never claimed");
+  } finally {
+    process.env.INVOICE_CARD_FEE_PERCENT = keep.pct;
+    if (keep.cards === undefined) delete process.env.INVOICE_CARD_FEE_CARDS;
+    else process.env.INVOICE_CARD_FEE_CARDS = keep.cards;
   }
 });
 

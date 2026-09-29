@@ -713,3 +713,74 @@
 .payment strong {
   font-variant-numeric: tabular-nums;
 }
+
+/* ───── phones & tablets: one column, so the pay box sits below the whole invoice ───── */
+/* A pay button that follows the reader down the invoice and parks at its end. */
+.stickyPay {
+  display: none;
+}
+@media (max-width: 979px) {
+  /* clip, not hidden: `hidden` makes the paper a scroll container, which stops sticky */
+  .paper {
+    overflow: clip;
+  }
+  .stickyPay {
+    position: sticky;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 52px;
+    margin-top: 22px;
+    padding: 12px 18px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #e85c97, #d24c8a 45%, #4f93da);
+    color: #fff;
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    text-decoration: none;
+    box-shadow:
+      0 12px 28px -12px rgba(232, 92, 151, 0.85),
+      0 2px 6px rgba(58, 42, 54, 0.12);
+  }
+  .stickyPay:focus-visible {
+    outline: 3px solid var(--blue);
+    outline-offset: 3px;
+  }
+}
+@media print {
+  .stickyPay {
+    display: none !important;
+  }
+}
+
+/* phones: 44px tap targets, slightly larger small print */
+@media (max-width: 767px) {
+  .ghostBtn {
+    min-height: 44px;
+  }
+  .linkBtn {
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+  .metaLabel {
+    font-size: 12px;
+  }
+  .payment a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+  /* bigger hit area for the email / phone links without moving the text */
+  .footer a {
+    position: relative;
+  }
+  .footer a::before {
+    content: "";
+    position: absolute;
+    inset: -14px -6px;
+  }
+}

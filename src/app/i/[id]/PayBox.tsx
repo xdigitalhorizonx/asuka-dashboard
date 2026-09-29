@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { loadStripe, type Stripe, type StripeElements, type Appearance } from "@stripe/stripe-js";
 import { DhMark } from "@/components/DhLogo";
+import { cardFeeWording } from "@/lib/invoice/types";
 import s from "../invoice.module.css";
 
 type Quote = { base: number; fee: number; total: number; feePercent: number; funding: string; brand: string; last4: string };
@@ -59,6 +60,8 @@ export function PayBox(props: {
   number: string;
   balance: number;
   cardFeePercent: number;
+  /** Every card pays the fee (debit too), not just credit cards. */
+  cardFeeAllCards: boolean;
   publishableKey: string;
   testMode: boolean;
   email: string;
@@ -67,7 +70,7 @@ export function PayBox(props: {
   /** Recurring lines billed by a subscription after today; non-empty → the card is saved. */
   recurring: Recurring[];
 }) {
-  const { invoiceId, balance, cardFeePercent, publishableKey, testMode, email, name, contactEmail, recurring } = props;
+  const { invoiceId, balance, cardFeePercent, cardFeeAllCards, publishableKey, testMode, email, name, contactEmail, recurring } = props;
   const saveCard = recurring.length > 0;
   const router = useRouter();
   const mountRef = useRef<HTMLDivElement>(null);
@@ -124,7 +127,10 @@ export function PayBox(props: {
           paymentMethodTypes: ["card"],
           // Monthly/yearly lines: keep the card on file for the subscription (must match the server's PaymentIntent).
           ...(saveCard ? { setupFutureUsage: "off_session" as const } : {}),
-          appearance: APPEARANCE,
+          // Phones zoom into any field under 16px on focus (iOS), so card fields are 16px there.
+          appearance: window.matchMedia("(max-width: 979px), (pointer: coarse)").matches
+            ? { ...APPEARANCE, variables: { ...APPEARANCE.variables, fontSizeBase: "16px" } }
+            : APPEARANCE,
           fonts: [{ cssSrc: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" }],
         });
         elementsRef.current = elements;
@@ -238,7 +244,7 @@ export function PayBox(props: {
   }
 
   const busy = phase === "paying";
-  const feeText = cardFeePercent > 0 ? `Credit cards add our ${cardFeePercent}% surcharge (not more than our cost). Debit and prepaid cards pay none.` : "No card fee.";
+  const feeText = cardFeePercent > 0 ? cardFeeWording(cardFeePercent, cardFeeAllCards).hint : "No card fee.";
   const renewal = saveCard
     ? `Then ${recurringText(recurring)}, charged automatically to this card. To change or cancel, email ${contactEmail}.`
     : "";
@@ -306,12 +312,12 @@ export function PayBox(props: {
                 </div>
                 {quote.fee > 0 ? (
                   <div className={s.reviewRow}>
-                    <span>Credit card surcharge ({quote.feePercent}%)</span>
+                    <span>{cardFeeWording(quote.feePercent, cardFeeAllCards).label}</span>
                     <span>{money(quote.fee)}</span>
                   </div>
                 ) : (
                   <div className={s.reviewRow} style={{ color: "var(--green-ink)" }}>
-                    <span>{cardFeePercent > 0 && (quote.funding === "debit" || quote.funding === "prepaid") ? `${quote.funding === "debit" ? "Debit" : "Prepaid"} card — no surcharge` : "No card fee"}</span>
+                    <span>{cardFeePercent > 0 && (quote.funding === "debit" || quote.funding === "prepaid") ? `${quote.funding === "debit" ? "Debit" : "Prepaid"} card — no card fee` : "No card fee"}</span>
                     <span>$0.00</span>
                   </div>
                 )}
