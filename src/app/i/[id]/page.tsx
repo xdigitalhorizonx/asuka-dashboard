@@ -7,7 +7,7 @@ import { seller } from "@/lib/invoice/seller";
 import { paymentsStatus, reconcileInvoice, stripePublishableKey } from "@/lib/invoice/payments";
 import { getInvoiceWithIntents, isInvoiceId } from "@/lib/invoice/store";
 import { effectiveCardFeePercent } from "@/lib/invoice/validate";
-import { cardFee, fmtLongDate, fmtMoney, localYmd, recurringGroups, type Invoice } from "@/lib/invoice/types";
+import { addPeriod, cardFee, fmtLongDate, fmtMoney, localYmd, recurringGroups, type Invoice } from "@/lib/invoice/types";
 import { PayBox } from "./PayBox";
 import s from "../invoice.module.css";
 
@@ -59,7 +59,13 @@ export default async function InvoicePage({ params }: Props) {
   const feeCredit = cardFee(inv.balance, feePct);
   const dueText = inv.dueDate ? `Due ${fmtLongDate(inv.dueDate)}` : "Due on receipt";
   const pdfHref = `/api/public/invoices/${inv.id}/pdf`;
-  const recurring = recurringGroups(inv.lines).map((g) => ({ interval: g.interval, amount: g.amount }));
+  // The renewal date is fixed here (Digital Horizon's calendar), not in the browser: the pay box
+  // is server-rendered too, and a UTC server + Pacific browser would disagree after 5 pm.
+  const recurring = recurringGroups(inv.lines).map((g) => ({
+    interval: g.interval,
+    amount: g.amount,
+    from: fmtLongDate(localYmd(addPeriod(new Date(), g.interval).toISOString())),
+  }));
   const per = (i: "month" | "year") => (i === "month" ? "month" : "year");
   const lastCard = inv.payments[inv.payments.length - 1];
 

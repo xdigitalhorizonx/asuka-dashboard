@@ -12,22 +12,12 @@ type Phase = "loading" | "entering" | "reviewing" | "paying" | "done" | "process
 const money = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const cents = (n: number) => Math.round(n * 100);
 const PER = { month: "month", year: "year" } as const;
-type Recurring = { interval: "month" | "year"; amount: number };
+/** `from` = when the first renewal lands if paid today, already formatted by the server. */
+type Recurring = { interval: "month" | "year"; amount: number; from: string };
 
 /** "$94.99/month from October 28, 2026" (+ " and $120.00/year from …") — what keeps billing after today. */
 function recurringText(r: Recurring[]): string {
-  return r.map((g) => `${money(g.amount)}/${PER[g.interval]} from ${firstRenewal(g.interval)}`).join(" and ");
-}
-
-/** One period from now, as the customer's calendar shows it: the date the first renewal lands. */
-function firstRenewal(interval: Recurring["interval"]): string {
-  const d = new Date();
-  const day = d.getDate();
-  d.setDate(1);
-  if (interval === "month") d.setMonth(d.getMonth() + 1);
-  else d.setFullYear(d.getFullYear() + 1);
-  d.setDate(Math.min(day, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()));
-  return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+  return r.map((g) => `${money(g.amount)}/${PER[g.interval]} from ${g.from}`).join(" and ");
 }
 
 /** Digital Horizon's pastel brand inside Stripe's card form. */
