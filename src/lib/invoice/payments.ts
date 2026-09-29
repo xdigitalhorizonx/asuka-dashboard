@@ -4,9 +4,9 @@ import { recordInvoiceTransaction } from "./customers";
 import { getInvoiceWithIntents, recordPayment, recordPaymentIntent, recordSubscription, type PaymentIntentRecord } from "./store";
 import { effectiveCardFeePercent } from "./validate";
 import {
-  addPeriod,
   cardFee,
   feeAppliesTo,
+  firstChargeAt,
   fmtLongDate,
   recurringGroups,
   round2,
@@ -15,6 +15,7 @@ import {
   type InvoiceLine,
   type InvoicePayment,
   type InvoiceSubscription,
+  type RecurringGroup,
 } from "./types";
 
 /**
@@ -214,7 +215,8 @@ async function customerFor(inv: Invoice, pis: PaymentIntentRecord[]): Promise<st
   const s = stripe();
   for (const rec of pis.slice(0, 3)) {
     const pi = await s.paymentIntents.retrieve(rec.paymentIntentId);
-    if (pi.metadata?.invoice_id === inv.id && idOf(pi.customer)) return idOf(pi.customer);
+    // Same invoice version = same client details; after an edit (e.g. a fixed email) look again.
+    if (pi.metadata?.invoice_id === inv.id && pi.metadata?.invoice_version === String(inv.version) && idOf(pi.customer)) return idOf(pi.customer);
   }
   const email = inv.client.email.trim();
   for (const e of new Set([email, email.toLowerCase()])) {
@@ -229,9 +231,23 @@ async function customerFor(inv: Invoice, pis: PaymentIntentRecord[]): Promise<st
       ...(inv.client.phone ? { phone: inv.client.phone } : {}),
       metadata: { source: "central-dogma-invoice", invoice_number: inv.number, invoice_id: inv.id },
     },
-    { idempotencyKey: `cus_inv_${inv.id}` }
+    { idempotencyKey: `cus_inv_${inv.id}_v${inv.version}` }
   );
   return c.id;
+}
+
+/**
+ * A live subscription on the customer that already bills this group: same interval and
+ * amount, started after the payment, not another invoice's — e.g. one Brandon set up by hand
+ * after an automatic start failed. It is adopted instead of starting a second one.
+ */
+export function billsGroup(sub: Stripe.Subscription, g: RecurringGroup, invoiceId: string, paidAtMs: number): boolean {
+  if (sub.status === "canceled" || sub.status === "incomplete_expired") return false;
+  if (sub.metadata?.invoice_id && sub.metadata.invoice_id !== invoiceId) return false;
+  const items = sub.items?.data ?? [];
+  if (!items.length || items.some((it) => it.price?.recurring?.interval !== g.interval)) return false;
+  const cents = items.reduce((sum, it) => sum + (it.price?.unit_amount ?? 0) * (it.quantity ?? 1), 0);
+  return cents === toCents(g.amount) && sub.created * 1000 >= paidAtMs - 24 * 3600_000;
 }
 
 /**
@@ -276,12 +292,20 @@ export async function ensureSubscriptions(inv: Invoice, pi: Stripe.PaymentIntent
   }
 
   const s = stripe();
+  // Never start billing on a payment that was refunded or disputed (refunds don't reopen invoices).
+  const charge = typeof pi.latest_charge === "string" ? await s.charges.retrieve(pi.latest_charge) : pi.latest_charge;
+  if (!charge || charge.refunded || charge.amount_refunded > 0 || charge.disputed) {
+    throw new PayError("This payment was refunded or disputed, so the monthly billing wasn't started.", 409);
+  }
   const existing = (await s.subscriptions.list({ customer, status: "all", limit: 100 })).data;
+  const paidAtMs = Date.parse(paidAt);
   const out: InvoiceSubscription[] = [];
   for (const g of missing) {
-    let sub = existing.find((x) => x.metadata?.invoice_id === inv.id && x.metadata?.interval === g.interval);
+    let sub =
+      existing.find((x) => x.metadata?.invoice_id === inv.id && x.metadata?.interval === g.interval) ??
+      existing.find((x) => billsGroup(x, g, inv.id, paidAtMs));
     if (!sub) {
-      const anchor = addPeriod(new Date(paidAt), g.interval);
+      const anchor = firstChargeAt(new Date(paidAt), g.interval);
       if (anchor.getTime() < Date.now() + 10 * 60_000) {
         throw new PayError(`The first ${g.interval}ly charge (${fmtLongDate(anchor.toISOString().slice(0, 10))}) is already past — set the subscription up in Stripe by hand.`, 409);
       }
@@ -323,7 +347,7 @@ export async function retrySubscriptions(inv: Invoice): Promise<Invoice> {
   if (inv.status !== "paid" || !missingSubscriptions(inv).length || !stripeSecretKey()) return inv;
   const last = inv.payments[inv.payments.length - 1];
   if (!last) return inv;
-  const pi = await stripe().paymentIntents.retrieve(last.paymentIntentId);
+  const pi = await stripe().paymentIntents.retrieve(last.paymentIntentId, { expand: ["latest_charge"] });
   await ensureSubscriptions(inv, pi, last.paidAt);
   return refreshed(inv.id);
 }
@@ -474,9 +498,13 @@ export async function finalizePayment(invoiceId: string, paymentIntentId: string
 /**
  * Webhook hook for a Stripe charge event. When the charge paid an invoice, records the
  * payment on the invoice (idempotent) and returns it so the caller can put it on the
- * Customers tab in the same vault write as the rest of the event.
+ * Customers tab in the same vault write as the rest of the event. Only `charge.succeeded`
+ * (`opts.startSubscriptions`) may start the monthly billing — never a refund or an update.
  */
-export async function invoicePaymentForCharge(ch: { id: string; payment_intent?: string | null; metadata?: Record<string, string> | null }): Promise<{ invoice: Invoice; payment: InvoicePayment } | null> {
+export async function invoicePaymentForCharge(
+  ch: { id: string; payment_intent?: string | null; metadata?: Record<string, string> | null },
+  opts: { startSubscriptions: boolean } = { startSubscriptions: false }
+): Promise<{ invoice: Invoice; payment: InvoicePayment } | null> {
   if (!ch.payment_intent || !stripeSecretKey()) return null;
   let invoiceId = ch.metadata?.invoice_id || "";
   let pi: Stripe.PaymentIntent | null = null;
@@ -491,6 +519,6 @@ export async function invoicePaymentForCharge(ch: { id: string; payment_intent?:
   if (pi.status !== "succeeded" || pi.metadata?.invoice_id !== invoiceId) return null;
   const payment = paymentFromIntent(pi, await latestCharge(pi));
   await recordPayment(invoiceId, payment);
-  await startSubscriptions(invoiceId, pi, payment.paidAt);
+  if (opts.startSubscriptions) await startSubscriptions(invoiceId, pi, payment.paidAt);
   return { invoice: (await getInvoiceWithIntents(invoiceId))?.invoice ?? found.invoice, payment };
 }

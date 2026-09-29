@@ -59,22 +59,24 @@ export async function POST(req: Request) {
   }
 
   try {
-    const state = await readState();
-    const customers = [...state.customers];
-    const ix = buildIndex(customers);
-    const now = new Date().toISOString();
-
-    let invoiceTx = false;
+    // Invoice work (Stripe calls, maybe starting a subscription) happens BEFORE the vault is
+    // read, so the read-modify-write below stays short and can't drop a concurrent edit.
+    let paid: Awaited<ReturnType<typeof invoicePaymentForCharge>> = null;
     if (event.type.startsWith("charge.")) {
       try {
-        const paid = await invoicePaymentForCharge(object as StripeCharge);
-        if (paid) invoiceTx = addInvoiceTransaction(customers, paid.invoice, paid.payment);
+        paid = await invoicePaymentForCharge(object as StripeCharge, { startSubscriptions: event.type === "charge.succeeded" });
       } catch (err) {
         // The invoice page and its finalize step reconcile with Stripe on their own;
         // never let an invoice lookup block the Customers import of this event.
         console.error("webhook: invoice lookup failed", err);
       }
     }
+
+    const state = await readState();
+    const customers = [...state.customers];
+    const ix = buildIndex(customers);
+    const now = new Date().toISOString();
+    const invoiceTx = paid ? addInvoiceTransaction(customers, paid.invoice, paid.payment) : false;
 
     const action = event.type.startsWith("customer.")
       ? upsertStripeCustomer(customers, invoiceTx ? buildIndex(customers) : ix, object as StripeCustomer, now)

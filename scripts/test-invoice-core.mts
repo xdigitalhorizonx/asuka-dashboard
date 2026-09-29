@@ -32,7 +32,7 @@ async function check(name: string, fn: () => unknown | Promise<unknown>) {
 const types = await import("../src/lib/invoice/types");
 const { validateInvoiceInput, InvoiceInputError, cardFeeCeiling, defaultCardFeePercent, effectiveCardFeePercent } = await import("../src/lib/invoice/validate");
 const store = await import("../src/lib/invoice/store");
-const { quoteFor, paymentFromIntent, paymentsStatus, savesCard, missingSubscriptions } = await import("../src/lib/invoice/payments");
+const { quoteFor, paymentFromIntent, paymentsStatus, savesCard, missingSubscriptions, billsGroup } = await import("../src/lib/invoice/payments");
 const { addInvoiceTransaction } = await import("../src/lib/invoice/customers");
 const blob = await import("../src/lib/blobstore");
 
@@ -253,6 +253,28 @@ await check("subscriptions: only a paid invoice with recurring lines needs one, 
   assert.deepEqual(missingSubscriptions(paid).map((g) => g.interval), ["month"]);
   const sub = { subscriptionId: "sub_1", customerId: "cus_1", interval: "month" as const, amount: 94.99, startsAt: "2026-10-29T17:00:00.000Z", createdAt: "2026-09-29T17:00:01.000Z" };
   assert.deepEqual(missingSubscriptions(types.deriveInvoice(doc, [pay], [sub])), []);
+});
+
+await check("subscriptions: first charge one period after payment (pulled in only past Stripe's limit); a hand-made match is adopted", () => {
+  const at = (paid: string, now: string, i: "month" | "year" = "month") => types.firstChargeAt(new Date(paid), i, new Date(now)).toISOString();
+  assert.equal(at("2026-09-28T23:02:05.000Z", "2026-09-28T23:02:09.000Z"), "2026-10-28T23:02:05.000Z");
+  assert.equal(at("2026-09-28T23:02:05.000Z", "2026-09-29T10:00:00.000Z"), "2026-10-28T23:02:05.000Z", "a later retry keeps the payment's date");
+  assert.equal(at("2026-10-30T18:00:00.000Z", "2026-10-31T09:00:00.000Z"), "2026-11-30T08:59:00.000Z", "paid Oct 30, retried Oct 31: just under Stripe's Nov 30 09:00 limit");
+  assert.equal(at("2028-02-29T12:00:00.000Z", "2028-02-29T12:00:03.000Z", "year"), "2029-02-28T12:00:00.000Z");
+
+  const g = types.recurringGroups(lines)[0];
+  const paidMs = Date.parse("2026-09-29T17:00:00.000Z");
+  const item = (cents: number, interval = "month") => ({ price: { unit_amount: cents, recurring: { interval } }, quantity: 1 });
+  const sub = (o: Record<string, unknown> = {}) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ({ status: "active", created: Date.parse("2026-09-30T00:00:00.000Z") / 1000, metadata: {}, items: { data: [item(9499)] }, ...o }) as any;
+  assert.equal(billsGroup(sub(), g, "inv1", paidMs), true, "same interval + amount, started after the payment");
+  assert.equal(billsGroup(sub({ metadata: { invoice_id: "inv1" } }), g, "inv1", paidMs), true);
+  assert.equal(billsGroup(sub({ status: "canceled" }), g, "inv1", paidMs), false);
+  assert.equal(billsGroup(sub({ metadata: { invoice_id: "other" } }), g, "inv1", paidMs), false, "another invoice's subscription");
+  assert.equal(billsGroup(sub({ created: Date.parse("2026-01-01T00:00:00.000Z") / 1000 }), g, "inv1", paidMs), false, "an older retainer isn't adopted");
+  assert.equal(billsGroup(sub({ items: { data: [item(5000)] } }), g, "inv1", paidMs), false);
+  assert.equal(billsGroup(sub({ items: { data: [item(9499, "year")] } }), g, "inv1", paidMs), false);
 });
 
 await check("store: subscription recorded once and served with the invoice, across versions", async () => {

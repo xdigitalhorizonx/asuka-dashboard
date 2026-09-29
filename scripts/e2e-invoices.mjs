@@ -7,9 +7,10 @@
  * 1. Run the board locally with TEST keys and no BLOB_READ_WRITE_TOKEN (local file storage):
  *    .env.local → STRIPE_SECRET_KEY=sk_test_… STRIPE_PUBLISHABLE_KEY=pk_test_…
  *    STRIPE_WEBHOOK_SECRET=<any whsec_…> ASUKA_DASHBOARD_PASSWORD=<pw> ASUKA_SESSION_SECRET=<32+ chars>
- * 2. Playwright isn't a dependency: `npm i playwright` in a scratch dir, point NODE_PATH at it.
+ * 2. Playwright isn't a dependency: `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm i --no-save playwright`
+ *    (uses your installed Chrome; set PW_CHROMIUM to its path if it isn't the Windows default).
  * 3. BASE=http://localhost:3000 E2E_PASSWORD=<pw> E2E_STRIPE_SK=sk_test_… E2E_WHSEC=<same whsec> \
- *    E2E_FEE_RULE=none|credit29 NODE_PATH=<scratch>/node_modules node scripts/e2e-invoices.mjs
+ *    E2E_FEE_RULE=none|credit29 node scripts/e2e-invoices.mjs      (E2E_ONLY=B,F runs a subset)
  *    (E2E_FEE_RULE must match INVOICE_CARD_FEE_PERCENT: unset → none, 2.9 → credit29.)
  * The public pay route allows 12 attempts per IP per 10 minutes; restart the dev server between runs.
  */
@@ -358,6 +359,31 @@ await scenario("H · 3DS with the page's finalize call lost → webhook records 
   await ctx3.close();
   const { p, pi: pi2 } = await verifyPaid("H", inv, { funding: "credit", recurringCents: 9499 });
   return `webhook-first ok · ${await verifyWebhookAndCustomers("H", inv, p, pi2)}`;
+});
+
+await scenario("J · refund → charge.refunded webhook starts no second subscription; Customers entry removed", async () => {
+  const inv = await createInvoice("E2E J", [oneTime("l1", "Setup", 60), monthly("l2", "Hosting", 39.99)]);
+  const { ctx, page } = await openPage(browser, `${BASE}/i/${inv.id}`);
+  await review(page, "4242424242424242");
+  await page.getByRole("button", { name: /^Pay \$/ }).click();
+  await page.getByText(/Payment received|Paid in full/).first().waitFor({ timeout: 60_000 });
+  await ctx.close();
+  const { p, pi } = await verifyPaid("J", inv, { funding: "credit", recurringCents: 3999 });
+  await verifyWebhookAndCustomers("J", inv, p, pi);
+  // TEST-mode refund (the key is checked to be sk_test_ at the top), then the real refund event.
+  const rf = await (await fetch("https://api.stripe.com/v1/refunds", { method: "POST", headers: { Authorization: `Bearer ${SK}` }, body: new URLSearchParams({ payment_intent: pi.id }) })).json();
+  must(rf.status === "succeeded" || rf.status === "pending", `refund: ${rf.status || rf.error?.message}`);
+  const ev = await eventFor("charge.refunded", (o) => o.payment_intent === pi.id);
+  const d = await deliver(ev);
+  must(d.status === 200, `charge.refunded webhook HTTP ${d.status}`);
+  const after = await getInvoice(inv.id);
+  must(after.subscriptions.length === 1, `${after.subscriptions.length} subscriptions recorded after the refund`);
+  const subs = await stripe("subscriptions", { customer: pi.customer, status: "all", limit: "100" });
+  must(subs.data.filter((s) => s.metadata.invoice_id === inv.id).length === 1, "a second subscription appeared after the refund");
+  const state = (await api("/api/state")).state ?? (await api("/api/state"));
+  const left = (state.customers || []).flatMap((c) => c.transactions).filter((t) => t.stripeId === p.chargeId);
+  must(left.length === 0, `${left.length} Customers entries still count the refunded charge`);
+  return `refund ${rf.status} · webhook 200 · still 1 subscription (cancel it in Stripe) · Customers entry removed`;
 });
 
 await scenario("I · dashboard shows the paid rows and the subscription", async () => {

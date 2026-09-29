@@ -183,6 +183,17 @@ export function addPeriod(from: Date, interval: RecurringInterval): Date {
   return d;
 }
 
+/**
+ * When a subscription's first charge lands: one period after the payment. Stripe refuses an
+ * anchor later than its own next natural billing date (now + one period, month ends clamped),
+ * which a retry across a month end can hit (paid Oct 30, retried Oct 31) — then just under it.
+ */
+export function firstChargeAt(paidAt: Date, interval: RecurringInterval, now: Date = new Date()): Date {
+  const want = addPeriod(paidAt, interval);
+  const latest = addPeriod(now, interval);
+  return want.getTime() <= latest.getTime() ? want : new Date(latest.getTime() - 60_000);
+}
+
 /** Fold a version + its payments into what the dashboard and public page show. */
 export function deriveInvoice(doc: InvoiceDoc, payments: InvoicePayment[], subscriptions: InvoiceSubscription[] = []): Invoice {
   const sorted = payments.slice().sort((a, b) => (a.paidAt < b.paidAt ? -1 : a.paidAt > b.paidAt ? 1 : 0));

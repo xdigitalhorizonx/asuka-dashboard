@@ -44,7 +44,7 @@ export async function proxy(req: NextRequest) {
   const pay = payHost();
   if (pay && (req.headers.get("host") || req.nextUrl.host).toLowerCase() === pay) {
     if (PAY_HOST_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) return NextResponse.next();
-    return NextResponse.redirect("https://digitalhorizon.dev/", 308);
+    return NextResponse.redirect("https://digitalhorizon.dev/", 307);
   }
 
   if (!gateEnabled()) return NextResponse.next();

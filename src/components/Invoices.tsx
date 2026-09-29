@@ -277,11 +277,18 @@ export function Invoices() {
     setBusy(null);
     if (!r.ok) {
       setNotice(r.data.error || `That didn't work (HTTP ${r.status}).`);
+      await load();
       return;
     }
     if (action === "refresh") {
-      const after = (r.data as { invoice?: Invoice }).invoice;
-      setNotice(after && missingSubs(inv) && !missingSubs(after) ? `${inv.number}: monthly billing set up in Stripe.` : `${inv.number}: checked with Stripe.`);
+      const { invoice: after, warning } = r.data as { invoice?: Invoice; warning?: string };
+      setNotice(
+        warning
+          ? `${inv.number}: ${warning}`
+          : after && missingSubs(inv) && !missingSubs(after)
+            ? `${inv.number}: monthly billing set up in Stripe.`
+            : `${inv.number}: checked with Stripe.`
+      );
     }
     if (created?.id === inv.id && action === "delete") setCreated(null);
     await load();
