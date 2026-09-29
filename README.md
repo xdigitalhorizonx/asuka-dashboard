@@ -259,3 +259,5 @@ Env vars (Vercel → Settings → Environment Variables, then redeploy):
 
 Local dev: without `BLOB_READ_WRITE_TOKEN`, files and invoices live under `./.asuka-local-blobs`
 (gitignored). Tests: `npx tsx scripts/test-invoice-core.mts`, `npx tsx scripts/test-proposal.ts`, `npx tsx scripts/test-invoice-pdf.ts`.
+End-to-end in Stripe **test mode** (real test cards, 3-D Secure, webhook, subscriptions): `scripts/e2e-invoices.mjs`
+— setup steps are in its header.
