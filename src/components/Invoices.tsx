@@ -173,7 +173,8 @@ export function Invoices() {
   const origin = data?.origin || (typeof window !== "undefined" ? window.location.origin : "");
   const linkFor = (inv: Invoice) => `${origin}/i/${inv.id}`;
   const feeDefault = data?.cardFeeDefault ?? 0;
-  const feeMax = data?.cardFeeMax ?? 0;
+  // Until the list loads, don't clamp: the draft already carries the server's fee (the server validates it).
+  const feeMax = data ? data.cardFeeMax : 3;
   const feeAllCards = data?.cardFeeAllCards ?? false;
 
   async function readProposal(file: File) {
@@ -956,7 +957,7 @@ function DraftEditor({
               disabled={feeMax <= 0}
               onChange={(e) => set({ cardFeePercent: Math.min(feeMax, Math.max(0, Number(e.target.value) || 0)) })}
               style={{ width: 90 }}
-              aria-label="Credit card surcharge percent"
+              aria-label="Card fee percent"
             />
             <span style={{ fontSize: 14, color: "var(--color-muted)" }}>
               {feeMax > 0
