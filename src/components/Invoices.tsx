@@ -5,7 +5,7 @@ import { tint, localToday } from "@/lib/crm";
 import { haptic } from "@/lib/haptics";
 import type { PaymentsStatus } from "@/lib/invoice/payments";
 import type { InvoiceInput } from "@/lib/invoice/store";
-import { cardFee, fmtMoney, round2, type Invoice, type InvoiceLine } from "@/lib/invoice/types";
+import { cardFee, fmtMoney, localYmd, recurringGroups, round2, type Invoice, type InvoiceLine, type RecurringInterval } from "@/lib/invoice/types";
 import { Icon } from "./icons";
 
 /**
@@ -20,13 +20,25 @@ type Payload = {
   invoices: Invoice[];
   payments: PaymentsStatus;
   cardFeeDefault: number;
+  /** The surcharge ceiling in force (0 = surcharging off). */
+  cardFeeMax: number;
   origin: string;
   storage: string;
   error?: string;
 };
 
-type EditLine = InvoiceLine & { amountText: string };
+/** `recurringText` is the "then $___ per period" price the subscription bills after this invoice. */
+type EditLine = InvoiceLine & { amountText: string; recurringText: string };
 type Draft = Omit<InvoiceInput, "lines"> & { lines: EditLine[] };
+const PER: Record<RecurringInterval, string> = { month: "mo", year: "yr" };
+
+/** Paid, has recurring lines, but not every interval has its subscription yet. */
+function missingSubs(inv: Invoice): boolean {
+  return inv.status === "paid" && recurringGroups(inv.lines).some((g) => !inv.subscriptions.some((s) => s.interval === g.interval));
+}
+function stripeSubUrl(id: string, live?: boolean): string {
+  return `https://dashboard.stripe.com/${live ? "" : "test/"}subscriptions/${id}`;
+}
 type ParseInfo = {
   ok: boolean;
   reason?: string;
@@ -38,7 +50,7 @@ type ParseInfo = {
 const ellipsis: CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 
 function toEdit(lines: InvoiceLine[]): EditLine[] {
-  return lines.map((l) => ({ ...l, amountText: l.amount ? l.amount.toFixed(2) : "0" }));
+  return lines.map((l) => ({ ...l, amountText: l.amount ? l.amount.toFixed(2) : "0", recurringText: l.recurring ? l.recurring.amount.toFixed(2) : "" }));
 }
 function parseAmount(t: string): number {
   const n = Number(String(t).replace(/[$,\s]/g, ""));
@@ -46,6 +58,13 @@ function parseAmount(t: string): number {
 }
 function draftTotal(d: Draft): number {
   return round2(d.lines.reduce((s, l) => s + (Number.isFinite(parseAmount(l.amountText)) ? parseAmount(l.amountText) : 0), 0));
+}
+/** Keep the proposal-style line note ("First month · then $94.99/mo") in step with the repeat price. */
+function syncNote(l: EditLine, interval: RecurringInterval | null, priceText: string): string {
+  const auto = !l.note.trim() || /^First (month|year) · then \$[\d,]+(\.\d+)?\/(mo|yr)$/.test(l.note.trim());
+  if (!auto) return l.note;
+  const price = parseAmount(priceText);
+  return interval && Number.isFinite(price) && price > 0 ? `First ${interval} · then ${fmtMoney(price)}/${PER[interval]}` : "";
 }
 function blankDraft(fee: number): Draft {
   return {
@@ -142,7 +161,8 @@ export function Invoices() {
 
   const origin = data?.origin || (typeof window !== "undefined" ? window.location.origin : "");
   const linkFor = (inv: Invoice) => `${origin}/i/${inv.id}`;
-  const feeDefault = data?.cardFeeDefault ?? 3;
+  const feeDefault = data?.cardFeeDefault ?? 0;
+  const feeMax = data?.cardFeeMax ?? 0;
 
   async function readProposal(file: File) {
     setFormError(null);
@@ -183,7 +203,7 @@ export function Invoices() {
     setFormError(null);
     setEditing(inv);
     const { issueDate, dueDate, client, project, lines, cardFeePercent, notes, source } = inv;
-    setDraft({ issueDate, dueDate, client, project, lines: toEdit(lines), cardFeePercent, notes, ...(source ? { source } : {}) });
+    setDraft({ issueDate, dueDate, client, project, lines: toEdit(lines), cardFeePercent: Math.min(cardFeePercent, feeMax), notes, ...(source ? { source } : {}) });
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -193,9 +213,16 @@ export function Invoices() {
       if (!l.name.trim() && !l.amountText.trim()) continue;
       const amount = parseAmount(l.amountText);
       if (!Number.isFinite(amount)) return `Line ${i + 1}: "${l.amountText}" isn't an amount.`;
+      let recurring: InvoiceLine["recurring"] = null;
+      if (l.recurring) {
+        const price = parseAmount(l.recurringText);
+        if (!Number.isFinite(price) || price <= 0) return `Line ${i + 1}: enter the price it repeats at, or set it to one-time.`;
+        recurring = { interval: l.recurring.interval, amount: price };
+      }
       const rest: Partial<EditLine> = { ...l };
       delete rest.amountText;
-      lines.push({ ...(rest as InvoiceLine), amount, zeroLabel: amount === 0 ? l.zeroLabel || "Included" : "" });
+      delete rest.recurringText;
+      lines.push({ ...(rest as InvoiceLine), amount, recurring, zeroLabel: amount === 0 ? l.zeroLabel || "Included" : "" });
     }
     return { ...d, lines };
   }
@@ -252,7 +279,10 @@ export function Invoices() {
       setNotice(r.data.error || `That didn't work (HTTP ${r.status}).`);
       return;
     }
-    if (action === "refresh") setNotice(`${inv.number}: checked with Stripe.`);
+    if (action === "refresh") {
+      const after = (r.data as { invoice?: Invoice }).invoice;
+      setNotice(after && missingSubs(inv) && !missingSubs(after) ? `${inv.number}: monthly billing set up in Stripe.` : `${inv.number}: checked with Stripe.`);
+    }
     if (created?.id === inv.id && action === "delete") setCreated(null);
     await load();
   }
@@ -277,7 +307,7 @@ export function Invoices() {
   const invoices = data?.invoices ?? [];
   const outstanding = round2(invoices.filter((i) => i.status === "open").reduce((s, i) => s + i.balance, 0));
   const ym = localToday().slice(0, 7);
-  const collected = round2(invoices.flatMap((i) => i.payments).filter((p) => p.paidAt.slice(0, 7) === ym).reduce((s, p) => s + p.amount, 0));
+  const collected = round2(invoices.flatMap((i) => i.payments).filter((p) => localYmd(p.paidAt).slice(0, 7) === ym).reduce((s, p) => s + p.amount, 0));
   const pay = data?.payments;
 
   return (
@@ -423,6 +453,7 @@ export function Invoices() {
           setDraft={setDraft}
           info={parseInfo}
           editing={editing}
+          feeMax={feeMax}
           busy={busy === "save"}
           error={formError}
           onSave={save}
@@ -478,8 +509,13 @@ export function Invoices() {
                     <span className="only-sm">
                       {inv.number} · <span style={{ color: st.color, fontWeight: 600 }}>{st.label}</span> ·{" "}
                     </span>
-                    {inv.status === "paid" && inv.paidAt ? `Paid ${fmtShortDate(inv.paidAt.slice(0, 10))}` : inv.status === "open" ? (inv.dueDate ? `Due ${fmtShortDate(inv.dueDate)}` : "Due on receipt") : "Voided"}
+                    {inv.status === "paid" && inv.paidAt ? `Paid ${fmtShortDate(localYmd(inv.paidAt))}` : inv.status === "open" ? (inv.dueDate ? `Due ${fmtShortDate(inv.dueDate)}` : "Due on receipt") : "Voided"}
+                    {inv.subscriptions.map((s) => ` · ${fmtMoney(s.amount)}/${PER[s.interval]} from ${fmtShortDate(localYmd(s.startsAt))}`).join("")}
+                    {inv.status === "open" && recurringGroups(inv.lines).map((g) => ` · then ${fmtMoney(g.amount)}/${PER[g.interval]}`).join("")}
                   </span>
+                  {missingSubs(inv) && (
+                    <span style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--color-amber)" }}>⚠ Monthly billing not set up — use More → Set up monthly billing</span>
+                  )}
                 </span>
                 <span className="hide-sm" style={{ fontSize: 13, color: "var(--color-muted)", whiteSpace: "nowrap" }}>
                   {fmtShortDate(inv.issueDate)}
@@ -596,6 +632,16 @@ function RowMenu({ inv, busy, onEdit, onAct, mailto }: { inv: Invoice; busy: boo
               Check Stripe for payment
             </button>
           )}
+          {missingSubs(inv) && (
+            <button role="menuitem" type="button" style={{ ...item, color: "var(--color-amber)" }} onClick={() => onAct("refresh")}>
+              Set up monthly billing
+            </button>
+          )}
+          {inv.subscriptions.map((s) => (
+            <a key={s.subscriptionId} role="menuitem" style={item} href={stripeSubUrl(s.subscriptionId, s.livemode)} target="_blank" rel="noopener">
+              {inv.subscriptions.length > 1 ? `${s.interval === "month" ? "Monthly" : "Yearly"} subscription` : "Subscription"} in Stripe ↗
+            </a>
+          ))}
           {inv.source?.path && (
             <a role="menuitem" style={item} href={`/api/invoices/${inv.id}/source`} target="_blank" rel="noopener">
               Source proposal
@@ -627,6 +673,7 @@ function DraftEditor({
   setDraft,
   info,
   editing,
+  feeMax,
   busy,
   error,
   onSave,
@@ -636,13 +683,15 @@ function DraftEditor({
   setDraft: (d: Draft) => void;
   info: ParseInfo | null;
   editing: Invoice | null;
+  feeMax: number;
   busy: boolean;
   error: string | null;
   onSave: () => void;
   onCancel: () => void;
 }) {
   const total = draftTotal(draft);
-  const fee = cardFee(total, draft.cardFeePercent);
+  const fee = cardFee(total, Math.min(draft.cardFeePercent, feeMax));
+  const repeats = recurringGroups(draft.lines.map((l) => ({ ...l, recurring: l.recurring ? { interval: l.recurring.interval, amount: parseAmount(l.recurringText) || 0 } : null })));
   const set = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
   const setClient = (k: keyof Draft["client"], v: string) => set({ client: { ...draft.client, [k]: v } });
   const setLine = (i: number, patch: Partial<EditLine>) => set({ lines: draft.lines.map((l, j) => (j === i ? { ...l, ...patch } : l)) });
@@ -739,7 +788,29 @@ function DraftEditor({
                   <input className="input" placeholder="Note" value={l.note} onChange={(e) => setLine(i, { note: e.target.value })} aria-label={`Line ${i + 1} note`} style={{ fontSize: 13 }} />
                 )}
               </div>
-              <input className="input" placeholder="Type" value={l.type} onChange={(e) => setLine(i, { type: e.target.value })} aria-label={`Line ${i + 1} type`} />
+              <div style={{ display: "grid", gap: 6 }}>
+                <input className="input" placeholder="Type" value={l.type} onChange={(e) => setLine(i, { type: e.target.value })} aria-label={`Line ${i + 1} type`} />
+                <select
+                  className="input"
+                  value={l.recurring?.interval ?? ""}
+                  onChange={(e) => {
+                    const interval = (e.target.value || null) as RecurringInterval | null;
+                    const priceText = l.recurringText || (parseAmount(l.amountText) > 0 ? l.amountText : "");
+                    setLine(i, {
+                      recurring: interval ? { interval, amount: parseAmount(priceText) || 0 } : null,
+                      recurringText: interval ? priceText : "",
+                      note: syncNote(l, interval, priceText),
+                    });
+                  }}
+                  aria-label={`Line ${i + 1} billing`}
+                  title="Repeating lines start a subscription on the client's card when they pay"
+                  style={{ fontSize: 13, padding: "6px 8px" }}
+                >
+                  <option value="">One-time</option>
+                  <option value="month">Then monthly</option>
+                  <option value="year">Then yearly</option>
+                </select>
+              </div>
               <div style={{ display: "grid", gap: 4 }}>
                 <input
                   className="input money"
@@ -754,6 +825,24 @@ function DraftEditor({
                   style={{ textAlign: "right" }}
                 />
                 {parseAmount(l.amountText) === 0 && <span style={{ fontSize: 12, color: "var(--color-muted)", textAlign: "right" }}>shows “{l.zeroLabel || "Included"}”</span>}
+                {l.recurring && (
+                  <label style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4, fontSize: 12, color: "var(--color-muted)" }}>
+                    then $
+                    <input
+                      className="input money"
+                      inputMode="decimal"
+                      value={l.recurringText}
+                      onChange={(e) => setLine(i, { recurringText: e.target.value, note: syncNote(l, l.recurring?.interval ?? null, e.target.value) })}
+                      onBlur={() => {
+                        const n = parseAmount(l.recurringText);
+                        if (Number.isFinite(n) && n > 0) setLine(i, { recurringText: n.toFixed(2) });
+                      }}
+                      aria-label={`Line ${i + 1} price per ${l.recurring.interval}`}
+                      style={{ width: 76, textAlign: "right", fontSize: 13, padding: "4px 6px", minHeight: 0 }}
+                    />
+                    /{PER[l.recurring.interval]}
+                  </label>
+                )}
               </div>
               <button type="button" className="btn btn-ghost" aria-label={`Remove line ${i + 1}`} onClick={() => set({ lines: draft.lines.filter((_, j) => j !== i) })} style={{ minHeight: 36, padding: 0 }}>
                 ×
@@ -764,7 +853,7 @@ function DraftEditor({
             type="button"
             className="btn"
             style={{ justifySelf: "start" }}
-            onClick={() => set({ lines: [...draft.lines, { id: `l${Date.now().toString(36)}`, name: "", description: "", type: "One-Time", recurring: null, amount: 0, zeroLabel: "", note: "", amountText: "" }] })}
+            onClick={() => set({ lines: [...draft.lines, { id: `l${Date.now().toString(36)}`, name: "", description: "", type: "One-Time", recurring: null, amount: 0, zeroLabel: "", note: "", amountText: "", recurringText: "" }] })}
           >
             + Add line
           </button>
@@ -773,20 +862,25 @@ function DraftEditor({
 
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end", justifyContent: "space-between" }}>
         <label style={{ display: "grid", gap: 4 }}>
-          <span className="label">Credit-card fee</span>
+          <span className="label">Credit-card surcharge</span>
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <input
               className="input"
               type="number"
               min={0}
-              max={3}
+              max={feeMax}
               step={0.1}
-              value={draft.cardFeePercent}
-              onChange={(e) => set({ cardFeePercent: Math.min(3, Math.max(0, Number(e.target.value) || 0)) })}
+              value={Math.min(draft.cardFeePercent, feeMax)}
+              disabled={feeMax <= 0}
+              onChange={(e) => set({ cardFeePercent: Math.min(feeMax, Math.max(0, Number(e.target.value) || 0)) })}
               style={{ width: 90 }}
-              aria-label="Credit card fee percent"
+              aria-label="Credit card surcharge percent"
             />
-            <span style={{ fontSize: 14, color: "var(--color-muted)" }}>% · credit cards only, never debit · max 3%</span>
+            <span style={{ fontSize: 14, color: "var(--color-muted)" }}>
+              {feeMax > 0
+                ? `% · credit cards only, never debit/prepaid · max ${feeMax}%`
+                : "% · off until the 30-day Stripe surcharge notice has run (INVOICE_CARD_FEE_PERCENT)"}
+            </span>
           </span>
         </label>
         <div style={{ textAlign: "right" }}>
@@ -794,7 +888,17 @@ function DraftEditor({
           <div className="total" style={{ color: HUE }}>
             {fmtMoney(total)}
           </div>
-          {fee > 0 && <div style={{ fontSize: 13, color: "var(--color-muted)" }}>Credit card: {fmtMoney(total + fee)} (incl. {fmtMoney(fee)} fee)</div>}
+          {fee > 0 && <div style={{ fontSize: 13, color: "var(--color-muted)" }}>Credit card: {fmtMoney(total + fee)} (incl. {fmtMoney(fee)} surcharge)</div>}
+          {repeats.length > 0 && (
+            <div style={{ fontSize: 13, color: "var(--color-muted)", maxWidth: 320, marginLeft: "auto" }}>
+              Then {repeats.map((g) => `${fmtMoney(g.amount)}/${PER[g.interval]}`).join(" + ")} — a Stripe subscription on the client&rsquo;s card starts when they pay.
+            </div>
+          )}
+          {repeats.length > 0 && !draft.client.email.trim() && (
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--color-amber)", maxWidth: 320, marginLeft: "auto" }}>
+              Add the client&rsquo;s email — Stripe sends their receipts and renewal notices there.
+            </div>
+          )}
         </div>
       </div>
 

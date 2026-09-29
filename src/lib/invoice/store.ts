@@ -8,13 +8,14 @@ import {
   ROOT,
   type StoredObject,
 } from "../blobstore";
-import { deriveInvoice, round2, sumLines, type Invoice, type InvoiceDoc, type InvoicePayment } from "./types";
+import { deriveInvoice, round2, sumLines, type Invoice, type InvoiceDoc, type InvoicePayment, type InvoiceSubscription } from "./types";
 
 /**
  * Invoice storage. Nothing is ever overwritten:
  *   invoices/<id>/doc-000001.json   one file per version (edits and voids add a version)
  *   invoices/<id>/pay-<pi>.json     one file per successful card payment
  *   invoices/<id>/pi-<pi>.json      PaymentIntents started for the invoice (for reuse / reconciliation)
+ *   invoices/<id>/sub-<sub>.json    Stripe subscription started for the invoice's recurring lines
  *   invoice-numbers/<n>.json        claim for invoice number DH-<n> (unique by construction).
  *                                   It holds no invoice id: these paths are sequential, and the
  *                                   24-char id is the only secret guarding a public invoice link.
@@ -49,6 +50,7 @@ interface InvoiceFiles {
   docs: StoredObject[];
   pays: StoredObject[];
   pis: StoredObject[];
+  subs: StoredObject[];
 }
 
 /** Immutable JSON never changes once written, so each instance can cache it forever. */
@@ -69,10 +71,10 @@ const docPath = (id: string, v: number) => `${INVOICES_PREFIX}${id}/doc-${String
 function group(objs: StoredObject[]): Map<string, InvoiceFiles> {
   const byId = new Map<string, InvoiceFiles>();
   for (const o of objs) {
-    const m = /^asuka-command-center\/invoices\/([A-Za-z0-9]{24})\/(doc|pay|pi)-[^/]+\.json$/.exec(o.pathname);
+    const m = /^asuka-command-center\/invoices\/([A-Za-z0-9]{24})\/(doc|pay|pi|sub)-[^/]+\.json$/.exec(o.pathname);
     if (!m) continue;
-    const f = byId.get(m[1]) ?? { docs: [], pays: [], pis: [] };
-    (m[2] === "doc" ? f.docs : m[2] === "pay" ? f.pays : f.pis).push(o);
+    const f = byId.get(m[1]) ?? { docs: [], pays: [], pis: [], subs: [] };
+    (m[2] === "doc" ? f.docs : m[2] === "pay" ? f.pays : m[2] === "pi" ? f.pis : f.subs).push(o);
     byId.set(m[1], f);
   }
   return byId;
@@ -85,7 +87,8 @@ async function assemble(files: InvoiceFiles): Promise<{ invoice: Invoice; pis: P
   if (!doc) return null;
   const payments = (await Promise.all(files.pays.map((p) => readCached<InvoicePayment>(p)))).filter((p): p is InvoicePayment => !!p);
   const pis = (await Promise.all(files.pis.map((p) => readCached<PaymentIntentRecord>(p)))).filter((p): p is PaymentIntentRecord => !!p);
-  return { invoice: deriveInvoice(doc, payments), pis: pis.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)) };
+  const subs = (await Promise.all(files.subs.map((p) => readCached<InvoiceSubscription>(p)))).filter((p): p is InvoiceSubscription => !!p);
+  return { invoice: deriveInvoice(doc, payments, subs), pis: pis.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)) };
 }
 
 export async function listInvoices(): Promise<Invoice[]> {
@@ -137,7 +140,7 @@ export async function createInvoice(input: InvoiceInput): Promise<Invoice> {
   const doc: InvoiceDoc = { ...finalize(input), id, number, version: 1, voided: false, createdAt: now, updatedAt: now };
   await putObject(docPath(id, 1), JSON.stringify(doc), { contentType: "application/json" });
   jsonCache.set(docPath(id, 1), doc);
-  return deriveInvoice(doc, []);
+  return deriveInvoice(doc, [], []);
 }
 
 /** Write the next version. `expectedVersion` guards against editing a copy someone else already changed. */
@@ -171,7 +174,7 @@ export async function saveVersion(current: Invoice, next: Partial<InvoiceInput> 
     throw err;
   }
   jsonCache.set(docPath(current.id, doc.version), doc);
-  return deriveInvoice(doc, current.payments);
+  return deriveInvoice(doc, current.payments, current.subscriptions);
 }
 
 /** Idempotent: the same PaymentIntent is recorded once however many times Stripe or the page reports it. */
@@ -180,6 +183,19 @@ export async function recordPayment(invoiceId: string, payment: InvoicePayment):
   try {
     await putObject(p, JSON.stringify(payment), { contentType: "application/json" });
     jsonCache.set(p, payment);
+    return true;
+  } catch (err) {
+    if (err instanceof ObjectExistsError) return false;
+    throw err;
+  }
+}
+
+/** Idempotent: one record per Stripe subscription, however many paths report it. */
+export async function recordSubscription(invoiceId: string, sub: InvoiceSubscription): Promise<boolean> {
+  const p = `${INVOICES_PREFIX}${invoiceId}/sub-${sub.subscriptionId}.json`;
+  try {
+    await putObject(p, JSON.stringify(sub), { contentType: "application/json" });
+    jsonCache.set(p, sub);
     return true;
   } catch (err) {
     if (err instanceof ObjectExistsError) return false;

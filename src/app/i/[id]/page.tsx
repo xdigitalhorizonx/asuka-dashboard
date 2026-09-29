@@ -6,7 +6,8 @@ import { DhMark } from "@/components/DhLogo";
 import { seller } from "@/lib/invoice/seller";
 import { paymentsStatus, reconcileInvoice, stripePublishableKey } from "@/lib/invoice/payments";
 import { getInvoiceWithIntents, isInvoiceId } from "@/lib/invoice/store";
-import { cardFee, fmtLongDate, fmtMoney, type Invoice } from "@/lib/invoice/types";
+import { effectiveCardFeePercent } from "@/lib/invoice/validate";
+import { cardFee, fmtLongDate, fmtMoney, localYmd, recurringGroups, type Invoice } from "@/lib/invoice/types";
 import { PayBox } from "./PayBox";
 import s from "../invoice.module.css";
 
@@ -54,9 +55,13 @@ export default async function InvoicePage({ params }: Props) {
   const me = seller();
   const pay = paymentsStatus();
   const open = inv.status === "open";
-  const feeCredit = cardFee(inv.balance, inv.cardFeePercent);
+  const feePct = effectiveCardFeePercent(inv);
+  const feeCredit = cardFee(inv.balance, feePct);
   const dueText = inv.dueDate ? `Due ${fmtLongDate(inv.dueDate)}` : "Due on receipt";
   const pdfHref = `/api/public/invoices/${inv.id}/pdf`;
+  const recurring = recurringGroups(inv.lines).map((g) => ({ interval: g.interval, amount: g.amount }));
+  const per = (i: "month" | "year") => (i === "month" ? "month" : "year");
+  const lastCard = inv.payments[inv.payments.length - 1];
 
   return (
     <div className={`${s.page} ${inter.variable} ${nunito.variable}`}>
@@ -89,7 +94,7 @@ export default async function InvoicePage({ params }: Props) {
                 <h1 className={s.number}>{inv.number}</h1>
               </div>
               {inv.status === "paid" ? (
-                <span className={`${s.pill} ${s.pillPaid}`}>Paid{inv.paidAt ? ` · ${fmtLongDate(inv.paidAt.slice(0, 10))}` : ""}</span>
+                <span className={`${s.pill} ${s.pillPaid}`}>Paid{inv.paidAt ? ` · ${fmtLongDate(localYmd(inv.paidAt))}` : ""}</span>
               ) : inv.status === "void" ? (
                 <span className={`${s.pill} ${s.pillVoid}`}>Void</span>
               ) : (
@@ -194,10 +199,25 @@ export default async function InvoicePage({ params }: Props) {
               </div>
             </div>
 
-            {open && inv.cardFeePercent > 0 && (
+            {open && feePct > 0 && (
               <p className={s.feeNote}>
-                Paying by credit card adds a {inv.cardFeePercent}% card processing fee ({fmtMoney(feeCredit)}). Debit cards pay no fee. You&rsquo;ll see the exact
-                total before you confirm.
+                Paying by credit card adds our {feePct}% credit card surcharge ({fmtMoney(feeCredit)}), which is not more than our cost of accepting credit
+                cards. Debit and prepaid cards pay no surcharge. You&rsquo;ll see the exact total before you confirm.
+              </p>
+            )}
+            {open && recurring.length > 0 && (
+              <p className={s.feeNote}>
+                This invoice covers the first {recurring.map((g) => per(g.interval)).join(" and ")}. After that,{" "}
+                {recurring.map((g) => `${fmtMoney(g.amount)}/${per(g.interval)}`).join(" and ")} is charged automatically to the card you pay with — it&rsquo;s
+                saved securely by Stripe for that. To change or cancel, email {me.email}.
+              </p>
+            )}
+            {inv.subscriptions.length > 0 && (
+              <p className={s.feeNote}>
+                {inv.subscriptions
+                  .map((sub) => `${fmtMoney(sub.amount)}/${per(sub.interval)} starts ${fmtLongDate(localYmd(sub.startsAt))}`)
+                  .join(" · ")}
+                , charged automatically to {lastCard ? `${brandName(lastCard.brand)} ••${lastCard.last4 || ""}` : "the card on file"}. To change or cancel, email {me.email}.
               </p>
             )}
 
@@ -207,12 +227,12 @@ export default async function InvoicePage({ params }: Props) {
                 {inv.payments.map((p) => (
                   <div key={p.paymentIntentId} className={s.payment}>
                     <span>
-                      {fmtLongDate(p.paidAt.slice(0, 10))} · {brandName(p.brand)}
+                      {fmtLongDate(localYmd(p.paidAt))} · {brandName(p.brand)}
                       {p.funding && p.funding !== "unknown" ? ` ${p.funding}` : ""}
                       {p.last4 ? ` ••${p.last4}` : ""}
                     </span>
                     <strong>{fmtMoney(p.amount)}</strong>
-                    {p.fee > 0 && <span className={s.metaMuted}>Includes {fmtMoney(p.fee)} credit card fee</span>}
+                    {p.fee > 0 && <span className={s.metaMuted}>Includes {fmtMoney(p.fee)} credit card surcharge</span>}
                     {p.receiptUrl && (
                       <a href={p.receiptUrl} target="_blank" rel="noopener noreferrer">
                         Receipt ↗
@@ -248,12 +268,13 @@ export default async function InvoicePage({ params }: Props) {
                 invoiceId={inv.id}
                 number={inv.number}
                 balance={inv.balance}
-                cardFeePercent={inv.cardFeePercent}
+                cardFeePercent={feePct}
                 publishableKey={stripePublishableKey()}
                 testMode={pay.mode === "test"}
                 email={inv.client.email}
                 name={inv.client.name}
                 contactEmail={me.email}
+                recurring={recurring}
               />
             ) : (
               <div className={s.payInner}>

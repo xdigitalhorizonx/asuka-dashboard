@@ -23,10 +23,12 @@ import {
   type PDFPage,
 } from "pdf-lib";
 import type { Seller } from "./seller";
+import { effectiveCardFeePercent } from "./validate";
 import {
   cardFee,
   fmtLongDate,
   fmtMoney,
+  recurringGroups,
   round2,
   sumLines,
   type Invoice,
@@ -947,11 +949,11 @@ class InvoiceLayout {
     const padY = 11;
     const labelH = 13;
     const innerW = SIDE_W - 2 * padX;
-    const pct = Number(inv.cardFeePercent) || 0;
+    const pct = effectiveCardFeePercent(inv);
     const url = this.url;
     // One sentence; when it does not fit on one line it breaks after the semicolon.
     const fee = fmtMoney(cardFee(inv.balance, pct));
-    const feeClauses = pct > 0 ? [`Paying by credit card adds a ${round2(pct)}% card fee (${fee});`, "debit cards pay no fee."] : [];
+    const feeClauses = pct > 0 ? [`Credit cards add our ${round2(pct)}% surcharge (${fee}), not more than our cost;`, "debit and prepaid cards pay none."] : [];
     const feeSentence = feeClauses.join(" ");
     const feeLines =
       measure(feeSentence, s.payText) <= innerW
@@ -962,12 +964,17 @@ class InvoiceLayout {
     const urlLines = url ? wrap(url, s.payUrl, innerW) : [];
     const fallback = url ? "" : "Pay securely by card from your invoice link.";
     const questions = contact.length ? `Questions? ${contact.join(" \u00b7 ")}` : "";
+    // Recurring lines: paying by card starts a subscription on that card.
+    const groups = recurringGroups(inv.lines ?? []);
+    const renewal = groups.length ? `Then ${groups.map((g) => `${fmtMoney(g.amount)}/${g.interval === "month" ? "mo" : "yr"}`).join(" + ")} auto-bills that card.` : "";
     const blocks: TextBlock[] = [
       { lines: urlLines, style: s.payUrl, leading: 13, gapBefore: 0 },
       { lines: wrap(fallback, s.payText, innerW), style: s.payText, leading: 12.5, gapBefore: 0 },
       { lines: feeLines, style: s.payText, leading: 12.5, gapBefore: 3 },
+      { lines: wrap(renewal, s.payText, innerW), style: s.payText, leading: 12.5, gapBefore: 3 },
       { lines: wrap(questions, s.payContact, innerW), style: s.payContact, leading: 11.5, gapBefore: 4 },
     ];
+    const CONTACT = 4;
     const height = 2 * padY + labelH + blocksHeight(blocks);
     return {
       height,
@@ -977,10 +984,10 @@ class InvoiceLayout {
         const tops = drawBlocks(this.page, blocks, MX + padX, top - padY - labelH);
         // Clickable: every line of the URL, and the email when the contact line did not wrap.
         if (url) urlLines.forEach((line, i) => this.link(MX + padX, tops[0] - (i + 1) * 13, measure(line, s.payUrl), 13, url));
-        const contactLines = blocks[3].lines;
+        const contactLines = blocks[CONTACT].lines;
         if (contactLines.length === 1 && /^[^\s@]+@[^\s@]+$/.test(email)) {
           const x = MX + padX + measure("Questions? ", s.payContact);
-          this.link(x, tops[3] - 11.5, measure(email, s.payContact), 11.5, `mailto:${email}`);
+          this.link(x, tops[CONTACT] - 11.5, measure(email, s.payContact), 11.5, `mailto:${email}`);
         }
       },
     };

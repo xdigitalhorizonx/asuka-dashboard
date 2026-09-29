@@ -13,6 +13,9 @@ import path from "node:path";
 const work = mkdtempSync(path.join(tmpdir(), "invoice-core-"));
 process.chdir(work);
 delete process.env.BLOB_READ_WRITE_TOKEN;
+// Surcharging on (2.9%), as it will be once the 30-day Stripe notice has run; the
+// "surcharge switch" check below covers the default (unset = off).
+process.env.INVOICE_CARD_FEE_PERCENT = "2.9";
 
 let passed = 0;
 async function check(name: string, fn: () => unknown | Promise<unknown>) {
@@ -27,9 +30,9 @@ async function check(name: string, fn: () => unknown | Promise<unknown>) {
 }
 
 const types = await import("../src/lib/invoice/types");
-const { validateInvoiceInput, InvoiceInputError } = await import("../src/lib/invoice/validate");
+const { validateInvoiceInput, InvoiceInputError, cardFeeCeiling, defaultCardFeePercent, effectiveCardFeePercent } = await import("../src/lib/invoice/validate");
 const store = await import("../src/lib/invoice/store");
-const { quoteFor, paymentFromIntent, paymentsStatus } = await import("../src/lib/invoice/payments");
+const { quoteFor, paymentFromIntent, paymentsStatus, savesCard, missingSubscriptions } = await import("../src/lib/invoice/payments");
 const { addInvoiceTransaction } = await import("../src/lib/invoice/customers");
 const blob = await import("../src/lib/blobstore");
 
@@ -46,7 +49,7 @@ const input = {
   client: { name: "Example Bakery Co.", email: "owner@example.com", phone: "", address: "" },
   project: "Rebuild the site.",
   lines,
-  cardFeePercent: 3,
+  cardFeePercent: 2.9,
   notes: "",
 };
 
@@ -69,10 +72,12 @@ await check("card fee: 3% of $2,494.99 is $74.85, credit only", () => {
   for (const f of ["debit", "prepaid", "unknown", "", null, undefined]) assert.equal(types.feeAppliesTo(f as string), false);
 });
 
-await check("quoteFor: credit adds fee, debit/prepaid/unknown don't, 0% never", () => {
+await check("quoteFor: credit adds the 2.9% surcharge, debit/prepaid/unknown don't, 0% never", () => {
   const inv = types.deriveInvoice({ ...input, id: "x".repeat(24), number: "DH-1", version: 1, voided: false, total: 2494.99, createdAt: "", updatedAt: "" }, []);
-  assert.deepEqual(quoteFor(inv, "credit"), { base: 2494.99, fee: 74.85, total: 2569.84, feePercent: 3 });
+  assert.deepEqual(quoteFor(inv, "credit"), { base: 2494.99, fee: 72.35, total: 2567.34, feePercent: 2.9 });
   for (const f of ["debit", "prepaid", "unknown"]) assert.deepEqual(quoteFor(inv, f), { base: 2494.99, fee: 0, total: 2494.99, feePercent: 0 });
+  const saved3 = { ...inv, cardFeePercent: 3 };
+  assert.deepEqual(quoteFor(saved3, "credit"), { base: 2494.99, fee: 72.35, total: 2567.34, feePercent: 2.9 }, "an invoice saved at 3% pays the 2.9% ceiling");
   const noFee = { ...inv, cardFeePercent: 0 };
   assert.deepEqual(quoteFor(noFee, "credit"), { base: 2494.99, fee: 0, total: 2494.99, feePercent: 0 });
 });
@@ -93,7 +98,7 @@ await check("deriveInvoice: fee never counts toward the balance; paid/void/paidA
   assert.equal(types.deriveInvoice({ ...doc, voided: true }, []).status, "void");
 });
 
-await check("validation: rounds, trims, requires name + an amount, caps fee at 3%", () => {
+await check("validation: rounds, trims, requires name + an amount, caps the surcharge at 2.9%", () => {
   const v = validateInvoiceInput({ ...input, lines: [...lines, { ...lines[2], id: "l9", amount: "1,234.567" }], client: { name: "  Example  ", email: "" } });
   assert.equal(v.client.name, "Example");
   assert.equal(v.lines.at(-1)!.amount, 1234.57);
@@ -105,7 +110,8 @@ await check("validation: rounds, trims, requires name + an amount, caps fee at 3
   bad({ lines: [] }, /at least one line/);
   bad({ lines: [{ ...lines[0] }] }, /total is \$0/);
   bad({ lines: [{ ...lines[1], amount: -5 }] }, /between \$0/);
-  bad({ cardFeePercent: 4 }, /between 0% and 3%/);
+  bad({ cardFeePercent: 4 }, /between 0% and 2.9%/);
+  bad({ cardFeePercent: 3 }, /between 0% and 2.9%/);
   bad({ issueDate: "09/28/2026" }, /Issue date/);
   bad({ dueDate: "2026-01-01" }, /before the issue date/);
   const noSource = validateInvoiceInput({ ...input, source: { fileName: "x.pdf", path: "../../etc/passwd", proposalDate: "" } });
@@ -198,6 +204,102 @@ await check("customers tab: invoice payment filed under the client once, by char
   assert.equal(existing.length, 1, "matched the existing customer by email instead of creating one");
 });
 
+await check("customers tab: the Stripe feed keeps an invoice payment's memo (and its fee note)", async () => {
+  const { applyStripeCharge, buildIndex } = await import("../src/lib/stripe");
+  const inv = types.deriveInvoice({ ...input, id: "m".repeat(24), number: "DH-11", version: 1, voided: false, total: 2494.99, createdAt: "", updatedAt: "" }, []);
+  const customers: Parameters<typeof addInvoiceTransaction>[0] = [];
+  addInvoiceTransaction(customers, inv, { paymentIntentId: "pi_m", chargeId: "ch_m", amount: 2567.34, fee: 72.35, paidAt: "2026-09-29T17:00:00.000Z" });
+  const ch = {
+    id: "ch_m", amount: 256734, amount_refunded: 0, currency: "usd", created: Date.parse("2026-09-29T17:00:00.000Z") / 1000,
+    status: "succeeded", paid: true, refunded: false, description: "Invoice DH-11 · Example Bakery Co.", customer: null, receipt_email: null, billing_details: null,
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  assert.equal(applyStripeCharge(customers, buildIndex(customers), ch as any, "2026-09-29T17:01:00.000Z"), "unchanged");
+  assert.equal(customers[0].transactions[0].memo, "Invoice DH-11 · incl. $72.35 card fee");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  assert.equal(applyStripeCharge(customers, buildIndex(customers), { ...ch, amount_refunded: 1000 } as any, "2026-09-30T17:01:00.000Z"), "updated");
+  assert.equal(customers[0].transactions[0].memo, "Invoice DH-11 · incl. $72.35 card fee · partial refund 10.00");
+  assert.equal(customers[0].transactions[0].amount, 2557.34);
+});
+
+await check("recurring: one group per interval, zero prices never recur; addPeriod clamps month ends", () => {
+  assert.deepEqual(
+    types.recurringGroups(lines).map((g) => [g.interval, g.amount, g.lines.map((l) => l.id)]),
+    [["month", 94.99, ["l5"]]]
+  );
+  const yearly = { ...lines[2], id: "y1", type: "Yearly", recurring: { interval: "year" as const, amount: 120 }, amount: 120 };
+  const zero = { ...lines[4], id: "z1", recurring: { interval: "month" as const, amount: 0 } };
+  const second = { ...lines[4], id: "l6", recurring: { interval: "month" as const, amount: 25 }, amount: 25 };
+  assert.deepEqual(
+    types.recurringGroups([...lines, yearly, zero, second]).map((g) => [g.interval, g.amount, g.lines.length]),
+    [["month", 119.99, 2], ["year", 120, 1]]
+  );
+  assert.deepEqual(types.recurringGroups(lines.filter((l) => !l.recurring)), []);
+  const at = (iso: string, i: "month" | "year") => types.addPeriod(new Date(iso), i).toISOString();
+  assert.equal(at("2026-09-28T23:02:05.000Z", "month"), "2026-10-28T23:02:05.000Z");
+  assert.equal(at("2026-01-31T15:00:00.000Z", "month"), "2026-02-28T15:00:00.000Z");
+  assert.equal(at("2026-03-31T10:00:00.000Z", "month"), "2026-04-30T10:00:00.000Z");
+  assert.equal(at("2026-12-15T00:00:00.000Z", "month"), "2027-01-15T00:00:00.000Z");
+  assert.equal(at("2028-02-29T12:00:00.000Z", "year"), "2029-02-28T12:00:00.000Z");
+});
+
+await check("subscriptions: only a paid invoice with recurring lines needs one, one per interval", () => {
+  assert.equal(savesCard({ lines }), true);
+  assert.equal(savesCard({ lines: lines.filter((l) => !l.recurring) }), false);
+  const doc = { ...input, id: "s".repeat(24), number: "DH-8", version: 1, voided: false, total: 2494.99, createdAt: "", updatedAt: "" };
+  const pay = { paymentIntentId: "pi_s", amount: 2494.99, fee: 0, paidAt: "2026-09-29T17:00:00.000Z" };
+  assert.equal(missingSubscriptions(types.deriveInvoice(doc, [])).length, 1, "open invoices report what they will need");
+  const paid = types.deriveInvoice(doc, [pay]);
+  assert.deepEqual(missingSubscriptions(paid).map((g) => g.interval), ["month"]);
+  const sub = { subscriptionId: "sub_1", customerId: "cus_1", interval: "month" as const, amount: 94.99, startsAt: "2026-10-29T17:00:00.000Z", createdAt: "2026-09-29T17:00:01.000Z" };
+  assert.deepEqual(missingSubscriptions(types.deriveInvoice(doc, [pay], [sub])), []);
+});
+
+await check("store: subscription recorded once and served with the invoice, across versions", async () => {
+  const sub = { subscriptionId: "sub_test_1", customerId: "cus_test_1", interval: "month" as const, amount: 94.99, startsAt: "2026-10-29T17:00:00.000Z", createdAt: "2026-09-29T17:00:01.000Z", livemode: false };
+  assert.equal(await store.recordSubscription(firstId, sub), true);
+  assert.equal(await store.recordSubscription(firstId, sub), false, "a replay records nothing");
+  const inv = (await store.getInvoice(firstId))!;
+  assert.deepEqual(inv.subscriptions, [sub]);
+  const voided = await store.saveVersion(inv, { voided: true }, inv.version);
+  assert.deepEqual(voided.subscriptions, [sub], "a new version keeps the subscription");
+  assert.deepEqual((await store.getInvoice(firstId))!.subscriptions, [sub]);
+});
+
+await check("saved card: the Stripe customer id is kept on the payment and linked on the Customers tab", () => {
+  const pi = { id: "pi_c", amount: 1000, amount_received: 1000, created: 1790700000, livemode: false, metadata: {}, customer: "cus_saved" };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const p = paymentFromIntent(pi as any, null);
+  assert.equal(p.customerId, "cus_saved");
+  const inv = types.deriveInvoice({ ...input, id: "c".repeat(24), number: "DH-9", version: 1, voided: false, total: 2494.99, createdAt: "", updatedAt: "" }, []);
+  const fresh: Parameters<typeof addInvoiceTransaction>[0] = [];
+  addInvoiceTransaction(fresh, inv, { ...p, chargeId: "ch_c1" });
+  assert.equal(fresh[0].stripeCustomerId, "cus_saved");
+  const known = [{ ...fresh[0], id: "c_known", stripeCustomerId: undefined, transactions: [] }];
+  addInvoiceTransaction(known, inv, { ...p, chargeId: "ch_c2" });
+  assert.equal(known[0].stripeCustomerId, "cus_saved", "filled in when the match had none");
+});
+
+await check("surcharge switch: unset = off (nothing charged or allowed), never above 2.9%", () => {
+  const keep = process.env.INVOICE_CARD_FEE_PERCENT;
+  try {
+    delete process.env.INVOICE_CARD_FEE_PERCENT;
+    assert.equal(cardFeeCeiling(), 0);
+    assert.equal(defaultCardFeePercent(), 0);
+    const inv = types.deriveInvoice({ ...input, cardFeePercent: 3, id: "o".repeat(24), number: "DH-10", version: 1, voided: false, total: 2494.99, createdAt: "", updatedAt: "" }, []);
+    assert.equal(effectiveCardFeePercent(inv), 0);
+    assert.deepEqual(quoteFor(inv, "credit"), { base: 2494.99, fee: 0, total: 2494.99, feePercent: 0 }, "a saved fee is not charged while surcharging is off");
+    assert.throws(() => validateInvoiceInput({ ...input, cardFeePercent: 1 }), /Card fees are off/);
+    assert.equal(validateInvoiceInput({ ...input, cardFeePercent: 0 }).cardFeePercent, 0);
+    for (const [env, want] of [["3", 2.9], ["2.5", 2.5], ["-1", 0], ["abc", 0]] as const) {
+      process.env.INVOICE_CARD_FEE_PERCENT = env;
+      assert.equal(cardFeeCeiling(), want, `INVOICE_CARD_FEE_PERCENT=${env}`);
+    }
+  } finally {
+    process.env.INVOICE_CARD_FEE_PERCENT = keep;
+  }
+});
+
 await check("payments status: key presence + live/test mismatch detection", () => {
   const keep = { sk: process.env.STRIPE_SECRET_KEY, pk: process.env.STRIPE_PUBLISHABLE_KEY };
   process.env.STRIPE_SECRET_KEY = "sk_test_x";
@@ -213,5 +315,6 @@ await check("payments status: key presence + live/test mismatch detection", () =
   if (keep.pk) process.env.STRIPE_PUBLISHABLE_KEY = keep.pk;
 });
 
+process.chdir(tmpdir()); // Windows can't remove the working directory
 rmSync(work, { recursive: true, force: true });
 console.log(`\n${passed} passed${process.exitCode ? " — FAILURES above" : ""}`);

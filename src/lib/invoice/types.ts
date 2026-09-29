@@ -85,6 +85,25 @@ export interface InvoicePayment {
   paidAt: string;
   receiptUrl?: string;
   livemode?: boolean;
+  /** Stripe customer the card was saved to (invoices with monthly/yearly lines). */
+  customerId?: string;
+}
+
+/**
+ * The Stripe subscription that bills an invoice's recurring lines after the first period
+ * (the first period is on the invoice itself). Written once when it's created, never edited;
+ * Stripe is the source of truth for its later status.
+ */
+export interface InvoiceSubscription {
+  subscriptionId: string;
+  customerId: string;
+  interval: RecurringInterval;
+  /** Dollars per period, all of this interval's lines together. */
+  amount: number;
+  /** When Stripe first charges the saved card (ISO). */
+  startsAt: string;
+  createdAt: string;
+  livemode?: boolean;
 }
 
 export type InvoiceStatus = "open" | "paid" | "void";
@@ -92,6 +111,7 @@ export type InvoiceStatus = "open" | "paid" | "void";
 /** An invoice as served: latest version + its payments + derived balance. */
 export interface Invoice extends InvoiceDoc {
   payments: InvoicePayment[];
+  subscriptions: InvoiceSubscription[];
   /** Applied to the invoice balance (payments minus card fees). */
   paid: number;
   balance: number;
@@ -130,8 +150,41 @@ export function feeAppliesTo(funding: string | null | undefined): boolean {
   return funding === "credit";
 }
 
+export interface RecurringGroup {
+  interval: RecurringInterval;
+  /** Dollars per period for these lines together. */
+  amount: number;
+  lines: InvoiceLine[];
+}
+
+/**
+ * The lines that keep billing after this invoice, one group per interval (a Stripe
+ * subscription can't mix monthly and yearly prices). Zero-priced lines never recur.
+ */
+export function recurringGroups(lines: InvoiceLine[]): RecurringGroup[] {
+  const out: RecurringGroup[] = [];
+  for (const interval of ["month", "year"] as const) {
+    const ls = lines.filter((l) => l.recurring?.interval === interval && l.recurring.amount > 0);
+    if (ls.length) out.push({ interval, amount: round2(ls.reduce((s, l) => s + (l.recurring?.amount ?? 0), 0)), lines: ls });
+  }
+  return out;
+}
+
+/**
+ * One billing period after `from`, same time of day. A month-end date clamps to the
+ * shorter month (Jan 31 → Feb 28), as Stripe does, so the first charge never skips a month.
+ */
+export function addPeriod(from: Date, interval: RecurringInterval): Date {
+  const y = from.getUTCFullYear() + (interval === "year" ? 1 : 0);
+  const m = from.getUTCMonth() + (interval === "month" ? 1 : 0);
+  const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  const d = new Date(from.getTime());
+  d.setUTCFullYear(y, m, Math.min(from.getUTCDate(), lastDay));
+  return d;
+}
+
 /** Fold a version + its payments into what the dashboard and public page show. */
-export function deriveInvoice(doc: InvoiceDoc, payments: InvoicePayment[]): Invoice {
+export function deriveInvoice(doc: InvoiceDoc, payments: InvoicePayment[], subscriptions: InvoiceSubscription[] = []): Invoice {
   const sorted = payments.slice().sort((a, b) => (a.paidAt < b.paidAt ? -1 : a.paidAt > b.paidAt ? 1 : 0));
   const paid = round2(sorted.reduce((s, p) => s + (p.amount - p.fee), 0));
   const balance = round2(Math.max(doc.total - paid, 0));
@@ -147,7 +200,18 @@ export function deriveInvoice(doc: InvoiceDoc, payments: InvoicePayment[]): Invo
       }
     }
   }
-  return { ...doc, payments: sorted, paid, balance, status, ...(paidAt ? { paidAt } : {}) };
+  const subs = subscriptions.slice().sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+  return { ...doc, payments: sorted, subscriptions: subs, paid, balance, status, ...(paidAt ? { paidAt } : {}) };
+}
+
+/**
+ * An instant (ISO) → "YYYY-MM-DD" on Digital Horizon's calendar (Carson City, NV), so an
+ * evening payment isn't shown as the next day's UTC date. Same zone as the PDF and the
+ * Customers tab.
+ */
+export function localYmd(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso.slice(0, 10) : d.toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
 }
 
 /** "2026-09-18" → "September 18, 2026" (no time-zone shift: the date is a calendar date). */

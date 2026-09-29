@@ -38,6 +38,8 @@ export function addInvoiceTransaction(customers: Customer[], inv: Invoice, p: In
     if (!c.email && inv.client.email) fill.email = inv.client.email;
     if (!c.phone && inv.client.phone) fill.phone = inv.client.phone;
     if (!c.address && inv.client.address) fill.address = inv.client.address;
+    // The card was saved to this Stripe customer: its monthly charges then land here too.
+    if (!c.stripeCustomerId && p.customerId) fill.stripeCustomerId = p.customerId;
     customers[i] = normalizeCustomer({ ...c, ...fill, transactions: [tx, ...c.transactions], updatedAt: now });
   } else {
     customers.push(
@@ -51,6 +53,7 @@ export function addInvoiceTransaction(customers: Customer[], inv: Invoice, p: In
         website: "",
         notes: `Added when invoice ${inv.number} was paid.`,
         transactions: [tx],
+        ...(p.customerId ? { stripeCustomerId: p.customerId } : {}),
         createdAt: now,
         updatedAt: now,
       })

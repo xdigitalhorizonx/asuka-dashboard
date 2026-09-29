@@ -11,6 +11,24 @@ type Phase = "loading" | "entering" | "reviewing" | "paying" | "done" | "process
 
 const money = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const cents = (n: number) => Math.round(n * 100);
+const PER = { month: "month", year: "year" } as const;
+type Recurring = { interval: "month" | "year"; amount: number };
+
+/** "$94.99/month from October 28, 2026" (+ " and $120.00/year from …") — what keeps billing after today. */
+function recurringText(r: Recurring[]): string {
+  return r.map((g) => `${money(g.amount)}/${PER[g.interval]} from ${firstRenewal(g.interval)}`).join(" and ");
+}
+
+/** One period from now, as the customer's calendar shows it: the date the first renewal lands. */
+function firstRenewal(interval: Recurring["interval"]): string {
+  const d = new Date();
+  const day = d.getDate();
+  d.setDate(1);
+  if (interval === "month") d.setMonth(d.getMonth() + 1);
+  else d.setFullYear(d.getFullYear() + 1);
+  d.setDate(Math.min(day, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()));
+  return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+}
 
 /** Digital Horizon's pastel brand inside Stripe's card form. */
 const APPEARANCE: Appearance = {
@@ -56,8 +74,11 @@ export function PayBox(props: {
   email: string;
   name: string;
   contactEmail: string;
+  /** Recurring lines billed by a subscription after today; non-empty → the card is saved. */
+  recurring: Recurring[];
 }) {
-  const { invoiceId, balance, cardFeePercent, publishableKey, testMode, email, name, contactEmail } = props;
+  const { invoiceId, balance, cardFeePercent, publishableKey, testMode, email, name, contactEmail, recurring } = props;
+  const saveCard = recurring.length > 0;
   const router = useRouter();
   const mountRef = useRef<HTMLDivElement>(null);
   const stripeRef = useRef<Stripe | null>(null);
@@ -111,12 +132,17 @@ export function PayBox(props: {
           amount: cents(balance),
           currency: "usd",
           paymentMethodTypes: ["card"],
+          // Monthly/yearly lines: keep the card on file for the subscription (must match the server's PaymentIntent).
+          ...(saveCard ? { setupFutureUsage: "off_session" as const } : {}),
           appearance: APPEARANCE,
           fonts: [{ cssSrc: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" }],
         });
         elementsRef.current = elements;
         const card = elements.create("payment", {
           layout: "tabs",
+          // No Link sign-up: it adds a required phone field when the card is being saved, and a
+          // Link payment hides the card's funding type (debit vs credit) that the pricing needs.
+          wallets: { link: "never" },
           defaultValues: { billingDetails: { ...(email ? { email } : {}), ...(name ? { name } : {}) } },
         });
         card.on("ready", () => !cancelled && setReady(true));
@@ -132,7 +158,7 @@ export function PayBox(props: {
       elementsRef.current?.getElement("payment")?.destroy();
       elementsRef.current = null;
     };
-  }, [publishableKey, balance, email, name, finish]);
+  }, [publishableKey, balance, email, name, finish, saveCard]);
 
   async function review() {
     const stripe = stripeRef.current;
@@ -222,7 +248,10 @@ export function PayBox(props: {
   }
 
   const busy = phase === "paying";
-  const feeText = cardFeePercent > 0 ? `Credit cards add a ${cardFeePercent}% card fee. Debit cards pay no fee.` : "No card fee.";
+  const feeText = cardFeePercent > 0 ? `Credit cards add our ${cardFeePercent}% surcharge (not more than our cost). Debit and prepaid cards pay none.` : "No card fee.";
+  const renewal = saveCard
+    ? `Then ${recurringText(recurring)}, charged automatically to this card. To change or cancel, email ${contactEmail}.`
+    : "";
 
   return (
     <>
@@ -246,6 +275,11 @@ export function PayBox(props: {
             <p className={s.payHint} style={{ margin: "6px 0 0" }}>
               {paidTotal !== null ? `${money(paidTotal)} paid. ` : ""}Thank you! A receipt is on its way{email ? ` to ${email}` : ""}.
             </p>
+            {saveCard && (
+              <p className={s.payHint} style={{ margin: "6px 0 0" }}>
+                Your card is saved for {recurringText(recurring)}.
+              </p>
+            )}
           </div>
         ) : phase === "processing" ? (
           <div className={s.success} role="status" aria-live="polite">
@@ -262,6 +296,11 @@ export function PayBox(props: {
           <>
             <div className={s.payAmount}>{money(balance)}</div>
             <p className={s.payHint}>{feeText}</p>
+            {saveCard && (
+              <p className={s.payHint} data-testid="renewal-note">
+                {renewal}
+              </p>
+            )}
 
             <div ref={mountRef} className={s.element} hidden={phase === "reviewing"} aria-busy={!ready} />
             {!ready && phase !== "reviewing" && <p className={s.payHint}>Loading secure card form…</p>}
@@ -277,19 +316,26 @@ export function PayBox(props: {
                 </div>
                 {quote.fee > 0 ? (
                   <div className={s.reviewRow}>
-                    <span>Credit card fee ({quote.feePercent}%)</span>
+                    <span>Credit card surcharge ({quote.feePercent}%)</span>
                     <span>{money(quote.fee)}</span>
                   </div>
                 ) : (
                   <div className={s.reviewRow} style={{ color: "var(--green-ink)" }}>
-                    <span>{quote.funding === "debit" || quote.funding === "prepaid" ? "Debit card — no card fee" : "No card fee"}</span>
+                    <span>{cardFeePercent > 0 && (quote.funding === "debit" || quote.funding === "prepaid") ? `${quote.funding === "debit" ? "Debit" : "Prepaid"} card — no surcharge` : "No card fee"}</span>
                     <span>$0.00</span>
                   </div>
                 )}
                 <div className={s.reviewTotal}>
-                  <span>Total</span>
+                  <span>Total today</span>
                   <span>{money(quote.total)}</span>
                 </div>
+                {saveCard && (
+                  <div className={s.reviewRow} style={{ marginTop: 6, fontSize: 13 }}>
+                    <span>
+                      Then {recurringText(recurring)}
+                    </span>
+                  </div>
+                )}
               </div>
             )}
 

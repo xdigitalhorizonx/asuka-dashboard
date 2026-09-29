@@ -141,6 +141,9 @@ function chargeMemo(ch: StripeCharge): string {
 
 export type ChargeResult = "added" | "updated" | "removed" | "unchanged" | "ignored" | "skipped";
 
+/** The memo `addInvoiceTransaction` writes for an invoice payment. */
+const INVOICE_MEMO = /^Invoice DH-[\w-]+(?: · incl\. \$[\d,]+\.\d\d card fee)?/;
+
 /**
  * Apply one Stripe charge to the customers list. Idempotent: the same charge id
  * updates in place; a charge that stopped being revenue (refunded) is removed.
@@ -179,6 +182,10 @@ export function applyStripeCharge(customers: Customer[], ix: CustomerIndex, ch: 
   if (ci >= 0) {
     const c = customers[ci];
     const old = c.transactions[ti];
+    // An invoice payment's memo ("Invoice DH-1004 · incl. $43.35 card fee") comes from the
+    // invoice flow; the charge's own description must not replace it (and drop the fee note).
+    const invoiceMemo = INVOICE_MEMO.exec(old.memo)?.[0];
+    if (invoiceMemo) fresh.memo = [invoiceMemo, ch.amount_refunded ? `partial refund ${(ch.amount_refunded / 100).toFixed(2)}` : ""].filter(Boolean).join(" · ");
     if (old.amount === fresh.amount && old.memo === fresh.memo && old.date === fresh.date) return "unchanged";
     const next = [...c.transactions];
     next[ti] = { ...old, amount: fresh.amount, memo: fresh.memo, date: fresh.date, stripeId: ch.id };

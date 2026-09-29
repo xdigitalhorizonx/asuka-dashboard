@@ -27,6 +27,9 @@ import {
 } from "../src/lib/invoice/types";
 
 const OUT = process.env.INVOICE_PDF_OUT || join(tmpdir(), "invoice-pdf-test");
+// Surcharging on at the 2.9% ceiling (the fixtures' saved 3% is capped to it), as it will be
+// once the 30-day Stripe notice has run; unset, no surcharge text is printed at all.
+process.env.INVOICE_CARD_FEE_PERCENT = "2.9";
 const SELLER = seller();
 const PUBLIC_URL = "https://central-dogma.example.com/i/k3j4h5g6f7d8s9a0";
 /** Parentheses must be escaped in the PDF link; the length forces wrapping in the pay box. */
@@ -240,7 +243,8 @@ const CASES: Case[] = [
       has(r, "Balance due $2,494.99");
       has(r, "PAY ONLINE");
       has(r, PUBLIC_URL);
-      has(r, "Paying by credit card adds a 3% card fee ($74.85); debit cards pay no fee.");
+      has(r, "Credit cards add our 2.9% surcharge ($72.35), not more than our cost; debit and prepaid cards pay none.");
+      has(r, "Then $94.99/mo auto-bills that card.");
       has(r, `Questions? ${SELLER.email} · ${SELLER.phone}`);
       has(r, "“bakery near me”");
       has(r, "Thank you for choosing Digital Horizon!");
@@ -363,7 +367,7 @@ const CASES: Case[] = [
     check: (r) => {
       has(r, "PAY ONLINE");
       has(r, "Pay securely by card from your invoice link.");
-      lacks(r, /card fee/i);
+      lacks(r, /surcharge|card fee/i);
       assert.equal(r.links.filter((l) => l.startsWith("http")).length, 0, "no URL links without a public URL");
     },
   },
@@ -403,7 +407,7 @@ const CASES: Case[] = [
       has(r, "Paid -$1,000.00");
       has(r, "Card fee paid: $30.00");
       has(r, "Balance due $1,494.99");
-      has(r, "adds a 3% card fee ($44.85)");
+      has(r, "add our 2.9% surcharge ($43.35)");
       has(r, "American Express credit ••0005 $1,030.00 $30.00");
       lacks(r, "PAID ");
     },
@@ -444,7 +448,7 @@ const CASES: Case[] = [
       assert.equal(r.inv.status, "open");
       assert.ok(r.pages.length >= 4, `expected several pages, got ${r.pages.length}`);
       has(r, "-$100.00");
-      has(r, "adds a 2.5% card fee");
+      has(r, "add our 2.5% surcharge");
       has(r, "Paid -$291.00");
       has(r, `Balance due ${"$"}844.56`);
       assert.ok(r.pages.filter((p) => flat(p).includes("DATE METHOD CHARGED INCL. CARD FEE")).length >= 2, "payments header repeats");

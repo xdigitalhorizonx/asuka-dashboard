@@ -49,7 +49,8 @@ npm run dev     # without BLOB_READ_WRITE_TOKEN it persists to ./.asuka-local-st
 - `ASUKA_SYNC_TOKEN` — shared secret for Asuka → dashboard sync (also accepted as a bearer on `/api/state`)
 - `ASUKA_DASHBOARD_PASSWORD` — enables the login gate; leave unset to run the board open
 - `ASUKA_SESSION_SECRET` — signs the session cookie (falls back to the password if unset)
-- `STRIPE_SECRET_KEY` — Digital Horizon Stripe key (a restricted key with Customers + Charges read is enough) for **⟳ SYNC STRIPE**
+- `STRIPE_SECRET_KEY` — Digital Horizon Stripe secret key, for **⟳ SYNC STRIPE** and invoice payments
+  (which write PaymentIntents, Customers, Products and Subscriptions — a read-only restricted key isn't enough)
 - `STRIPE_WEBHOOK_SECRET` — signing secret of the Stripe webhook endpoint pointed at `/api/stripe/webhook`
 - `CRON_SECRET` — lets Vercel Cron call `/api/stripe/sync` through the gate
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` — the "Web application" OAuth client that powers the
@@ -193,7 +194,7 @@ Browser UI uses same-origin `GET/POST /api/state` (session cookie, or `Authoriza
 
 ## Invoices
 
-**Flow:** Invoices tab → drop the proposal PDF → review (client, dates, lines, notes, card fee) →
+**Flow:** Invoices tab → drop the proposal PDF → review (client, dates, lines and what repeats monthly, notes) →
 **Create live invoice** → copy / open / email the link. Edit (until paid), void, restore, delete
 (unpaid only), *Check Stripe for payment*, download the PDF and open the source proposal from the row menu.
 
@@ -205,12 +206,31 @@ Browser UI uses same-origin `GET/POST /api/state` (session cookie, or `Authoriza
 - **Public link** `/i/<24-char random id>` is outside the login gate (`proxy.ts`), as are
   `/api/public/invoices/<id>/{pdf,quote,pay,finalize}`; the id is the credential. Pages send
   `noindex` + `Referrer-Policy: no-referrer`. The public page never exposes storage URLs.
-- **Card fee:** `cardFeePercent` (default 3, max 3 — Visa's cap) is added **only to credit cards**;
-  debit and prepaid cards pay the invoice amount (card-network rules forbid surcharging them). The
-  page reads the card's funding type from a Stripe ConfirmationToken and shows the exact total
-  before the customer confirms; the server recomputes the amount (the browser never sets it).
-  Before charging a surcharge in production, register it with Visa and Mastercard (they require
-  advance notice) and keep the disclosure visible — the invoice page and PDF already show it.
+- **Credit-card surcharge — OFF by default.** `INVOICE_CARD_FEE_PERCENT` switches it on (capped at
+  **2.9%**: DH's Stripe cost is 2.9% + 30¢ on every card, and Visa caps a surcharge at the lower of the
+  merchant's average cost and 3%). It applies **only to credit cards** — debit and prepaid never
+  (card-network rules). The page reads the card's funding type from a Stripe ConfirmationToken and
+  shows the exact total before the customer confirms; the server recomputes the amount (the browser
+  never sets it). An invoice saved with a higher fee pays the ceiling in force, so nothing is
+  surcharged while the switch is off, and no fee text is shown anywhere. **Before switching it on:**
+  (1) send Stripe written notice and wait 30 days (Visa Rules 5.5.1.5 — no surcharge *or announcement*
+  before then); (2) pass the surcharge in Stripe's `amount_details[surcharge]` field (preview API,
+  `Stripe-Version: 2026-03-25.preview`); (3) decide on Amex (its rules clash with the debit ban);
+  (4) don't surcharge clients in CT, MA, ME or PR; (5) decide whether monthly renewals carry it too
+  (today they bill the plain price).
+- **Monthly / yearly lines → Stripe subscription.** A line marked *Then monthly/yearly* bills its
+  first period on the invoice. When the client pays, the Payment Element saves the card
+  (`setup_future_usage=off_session`) to their Stripe customer (the newest one with the invoice's
+  email, else a new one), and once the invoice is paid `ensureSubscriptions` starts a subscription for
+  those lines (one per interval, a product per service name) with the first charge one period after
+  the payment (`billing_cycle_anchor`, no proration). Started from the page, the webhook and
+  *Check Stripe*; idempotent (records `invoices/<id>/sub-<sub>.json`, finds existing ones by
+  `metadata.invoice_id`). A paid invoice missing its subscription is flagged on the dashboard with a
+  *Set up monthly billing* retry. Renewal charges reach the Customers tab through the normal Stripe
+  feed. Refunding or cancelling is done in Stripe (a refund doesn't cancel the subscription).
+- **Branded links:** with `INVOICE_PUBLIC_ORIGIN=https://pay.digitalhorizon.dev`, share links use
+  that host, and `proxy.ts` lets it serve only `/i/…`, `/api/public/…` and icons — every other path
+  there redirects to digitalhorizon.dev, so the dashboard never shows on the client-facing domain.
 - **Payments** are recorded only from a PaymentIntent Stripe reports as succeeded: right after
   payment, after 3-D Secure, when the invoice page is reloaded, from *Check Stripe for payment*, and
   from the Stripe webhook (`charge.succeeded`). Each invoice reuses one open PaymentIntent, so a
@@ -220,8 +240,7 @@ Browser UI uses same-origin `GET/POST /api/state` (session cookie, or `Authoriza
   `invoices/<id>/doc-<version>.json`, payments are `pay-<pi>.json`, invoice numbers (`DH-1001`, …)
   are claimed as `invoice-numbers/<n>.json`. Two concurrent edits can't both win.
 - **Not handled yet:** a refund made in Stripe doesn't re-open the invoice (it does update the
-  Customers tab via the webhook). Recurring monthly billing isn't automated — the invoice notes what
-  continues monthly.
+  Customers tab via the webhook) or cancel its subscription.
 
 Env vars (Vercel → Settings → Environment Variables, then redeploy):
 
@@ -229,12 +248,14 @@ Env vars (Vercel → Settings → Environment Variables, then redeploy):
 - `STRIPE_PUBLISHABLE_KEY` — matching publishable key (`pk_live_…`). **Without it the pay box stays
   off** and the page asks the client to email/call instead. Test keys (`sk_test_`/`pk_test_`) put the
   page in a clearly labelled test mode.
-- `INVOICE_CARD_FEE_PERCENT` — optional default fee for new invoices (default `3`, max `3`)
+- `INVOICE_CARD_FEE_PERCENT` — the credit-card surcharge; **unset = off**. Max `2.9`. Only set it
+  after the 30-day Stripe notice (see *Credit-card surcharge* above).
 - `INVOICE_FROM_EMAIL`, `INVOICE_FROM_PHONE` — optional; default to the contact line on DH proposals
-- `INVOICE_PUBLIC_ORIGIN` — optional, e.g. `https://pay.digitalhorizon.dev` once a custom domain
-  points at this project; share links otherwise use the host the board is opened on
+- `INVOICE_PUBLIC_ORIGIN` — e.g. `https://pay.digitalhorizon.dev` (a CNAME to this project);
+  share links otherwise use the host the board is opened on
 - Stripe webhook (existing `/api/stripe/webhook`) should include `charge.succeeded` — it's a
-  safety net; payments are recorded without it too.
+  safety net; payments and subscriptions are recorded without it too.
+- Preview/Development get Stripe **test** keys; only Production has the live ones.
 
 Local dev: without `BLOB_READ_WRITE_TOKEN`, files and invoices live under `./.asuka-local-blobs`
 (gitignored). Tests: `npx tsx scripts/test-invoice-core.mts`, `npx tsx scripts/test-proposal.ts`, `npx tsx scripts/test-invoice-pdf.ts`.

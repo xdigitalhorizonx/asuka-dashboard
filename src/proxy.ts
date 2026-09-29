@@ -21,9 +21,33 @@ const OPEN = [
   "/icons",
 ];
 
+/** What the branded invoice-link host serves: the live invoices and the assets they load. */
+const PAY_HOST_PATHS = ["/i", "/api/public", "/manifest.webmanifest", "/apple-touch-icon.png", "/icons"];
+
+/**
+ * The host of INVOICE_PUBLIC_ORIGIN (e.g. pay.digitalhorizon.dev) when it's a dedicated
+ * client-facing domain. A *.vercel.app origin is the dashboard's own host, never restricted.
+ */
+function payHost(): string {
+  try {
+    const host = new URL(process.env.INVOICE_PUBLIC_ORIGIN || "").host.toLowerCase();
+    return host.endsWith(".vercel.app") ? "" : host;
+  } catch {
+    return "";
+  }
+}
+
 export async function proxy(req: NextRequest) {
-  if (!gateEnabled()) return NextResponse.next();
   const { pathname } = req.nextUrl;
+  // Clients only ever see invoice pages on the branded link domain; everything else there
+  // (the dashboard, its login) goes to the Digital Horizon site instead.
+  const pay = payHost();
+  if (pay && (req.headers.get("host") || req.nextUrl.host).toLowerCase() === pay) {
+    if (PAY_HOST_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) return NextResponse.next();
+    return NextResponse.redirect("https://digitalhorizon.dev/", 308);
+  }
+
+  if (!gateEnabled()) return NextResponse.next();
   if (OPEN.some((p) => pathname === p || pathname.startsWith(p + "/"))) return NextResponse.next();
 
   if (await verifySession(req.cookies.get(SESSION_COOKIE)?.value)) return NextResponse.next();

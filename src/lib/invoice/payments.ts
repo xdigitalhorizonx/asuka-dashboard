@@ -1,7 +1,21 @@
+import { createHash } from "crypto";
 import Stripe from "stripe";
 import { recordInvoiceTransaction } from "./customers";
-import { getInvoiceWithIntents, recordPayment, recordPaymentIntent, type PaymentIntentRecord } from "./store";
-import { cardFee, feeAppliesTo, round2, toCents, type Invoice, type InvoicePayment } from "./types";
+import { getInvoiceWithIntents, recordPayment, recordPaymentIntent, recordSubscription, type PaymentIntentRecord } from "./store";
+import { effectiveCardFeePercent } from "./validate";
+import {
+  addPeriod,
+  cardFee,
+  feeAppliesTo,
+  fmtLongDate,
+  recurringGroups,
+  round2,
+  toCents,
+  type Invoice,
+  type InvoiceLine,
+  type InvoicePayment,
+  type InvoiceSubscription,
+} from "./types";
 
 /**
  * Card payments for the public invoice page, "finalize on the server" style:
@@ -15,6 +29,12 @@ import { cardFee, feeAppliesTo, round2, toCents, type Invoice, type InvoicePayme
  *  4. 3-D Secure, if the bank asks for it, finishes in the browser and `finalizePayment`
  *     re-reads the PaymentIntent from Stripe.
  * A payment is recorded only from a PaymentIntent Stripe reports as succeeded.
+ *
+ * Invoices with monthly (or yearly) lines bill the first period with everything else, and
+ * the payment saves the card to the client's Stripe customer. Once the invoice is paid,
+ * `ensureSubscriptions` starts a Stripe subscription for those lines whose first charge is
+ * one period after the payment — so one-time items are charged once, recurring ones keep
+ * billing the card on file.
  */
 
 export class PayError extends Error {
@@ -87,10 +107,20 @@ export interface CardQuote {
   last4: string;
 }
 
-async function readCard(confirmationTokenId: string) {
+/** Invoices with recurring lines save the card for the subscription that bills them later. */
+export function savesCard(inv: Pick<Invoice, "lines">): boolean {
+  return recurringGroups(inv.lines).length > 0;
+}
+
+async function readCard(inv: Invoice, confirmationTokenId: string) {
   if (!/^ctoken_[A-Za-z0-9]+$/.test(confirmationTokenId)) throw new PayError("Invalid card details — please re-enter the card.", 400);
   const ct = await stripe().confirmationTokens.retrieve(confirmationTokenId);
   if (ct.payment_intent) throw new PayError("That card entry was already used — please enter the card again.", 409);
+  // The page asks to save the card exactly when the invoice has recurring lines; a mismatch
+  // means the invoice was edited while the page was open.
+  if ((ct.setup_future_usage ?? null) !== (savesCard(inv) ? "off_session" : null)) {
+    throw new PayError("This invoice changed while the page was open — please reload it and pay again.", 409);
+  }
   const card = ct.payment_method_preview?.card;
   if (!card) throw new PayError("Only card payments are accepted on this page.", 400);
   return { funding: card.funding || "unknown", brand: card.display_brand || card.brand || "card", last4: card.last4 || "" };
@@ -98,14 +128,15 @@ async function readCard(confirmationTokenId: string) {
 
 export function quoteFor(inv: Invoice, funding: string): Pick<CardQuote, "base" | "fee" | "total" | "feePercent"> {
   const base = inv.balance;
-  const fee = feeAppliesTo(funding) ? cardFee(base, inv.cardFeePercent) : 0;
-  return { base, fee, total: round2(base + fee), feePercent: fee > 0 ? inv.cardFeePercent : 0 };
+  const pct = effectiveCardFeePercent(inv);
+  const fee = feeAppliesTo(funding) ? cardFee(base, pct) : 0;
+  return { base, fee, total: round2(base + fee), feePercent: fee > 0 ? pct : 0 };
 }
 
 /** What this specific card would be charged — shown to the customer before they confirm. */
 export async function quoteCard(inv: Invoice, confirmationTokenId: string): Promise<CardQuote> {
   assertPayable(inv);
-  const card = await readCard(confirmationTokenId);
+  const card = await readCard(inv, confirmationTokenId);
   return { ...quoteFor(inv, card.funding), ...card };
 }
 
@@ -113,8 +144,10 @@ export function paymentFromIntent(pi: Stripe.PaymentIntent, charge: Stripe.Charg
   const card = charge?.payment_method_details?.card ?? null;
   const amount = round2((pi.amount_received || pi.amount) / 100);
   const fee = Math.min(round2(Number(pi.metadata?.fee_cents || 0) / 100), amount);
+  const customerId = typeof pi.customer === "string" ? pi.customer : pi.customer?.id;
   return {
     paymentIntentId: pi.id,
+    ...(customerId ? { customerId } : {}),
     ...(charge ? { chargeId: charge.id } : {}),
     amount,
     fee,
@@ -132,7 +165,10 @@ async function latestCharge(pi: Stripe.PaymentIntent): Promise<Stripe.Charge | n
   return typeof pi.latest_charge === "string" ? stripe().charges.retrieve(pi.latest_charge) : pi.latest_charge;
 }
 
-/** Record a succeeded PaymentIntent on its invoice (idempotent) and on the Customers tab. */
+/**
+ * Record a succeeded PaymentIntent on its invoice (idempotent) and on the Customers tab,
+ * then start the monthly billing if that payment settled an invoice with recurring lines.
+ */
 async function recordSucceeded(inv: Invoice, pi: Stripe.PaymentIntent): Promise<void> {
   const payment = paymentFromIntent(pi, await latestCharge(pi));
   await recordPayment(inv.id, payment);
@@ -142,12 +178,154 @@ async function recordSucceeded(inv: Invoice, pi: Stripe.PaymentIntent): Promise<
     // The invoice is paid either way; the Customers entry also arrives via the Stripe sync.
     console.error(`invoice ${inv.number}: customers tab update failed`, err);
   }
+  await startSubscriptions(inv.id, pi, payment.paidAt);
 }
 
 async function refreshed(id: string): Promise<Invoice> {
   const again = await getInvoiceWithIntents(id);
   if (!again) throw new PayError("Invoice not found.", 404);
   return again.invoice;
+}
+
+/** After a payment: start the subscriptions. A failure is logged and never fails the payment. */
+async function startSubscriptions(invoiceId: string, pi: Stripe.PaymentIntent, paidAt: string): Promise<void> {
+  try {
+    await ensureSubscriptions(await refreshed(invoiceId), pi, paidAt);
+  } catch (err) {
+    // The dashboard flags a paid invoice whose recurring lines have no subscription, and
+    // its "Set up monthly billing" action retries this with the error shown.
+    console.error(`invoice ${invoiceId}: subscription not started`, err);
+  }
+}
+
+const idOf = (v: string | { id: string } | null | undefined) => (typeof v === "string" ? v : v?.id ?? "");
+
+/** Recurring intervals that should have a subscription but don't yet. */
+export function missingSubscriptions(inv: Invoice) {
+  return recurringGroups(inv.lines).filter((g) => !inv.subscriptions.some((s) => s.interval === g.interval));
+}
+
+/**
+ * The Stripe customer an invoice's card is saved to: the one an earlier attempt on this
+ * invoice already used, else the newest customer with the client's email (Stripe often
+ * holds duplicates for one person), else a new one.
+ */
+async function customerFor(inv: Invoice, pis: PaymentIntentRecord[]): Promise<string> {
+  const s = stripe();
+  for (const rec of pis.slice(0, 3)) {
+    const pi = await s.paymentIntents.retrieve(rec.paymentIntentId);
+    if (pi.metadata?.invoice_id === inv.id && idOf(pi.customer)) return idOf(pi.customer);
+  }
+  const email = inv.client.email.trim();
+  for (const e of new Set([email, email.toLowerCase()])) {
+    if (!e) continue;
+    const found = await s.customers.list({ email: e, limit: 1 });
+    if (found.data[0]) return found.data[0].id;
+  }
+  const c = await s.customers.create(
+    {
+      name: inv.client.name,
+      ...(email ? { email } : {}),
+      ...(inv.client.phone ? { phone: inv.client.phone } : {}),
+      metadata: { source: "central-dogma-invoice", invoice_number: inv.number, invoice_id: inv.id },
+    },
+    { idempotencyKey: `cus_inv_${inv.id}` }
+  );
+  return c.id;
+}
+
+/**
+ * One Stripe product per service name (a stable id derived from the name), so the monthly
+ * Stripe invoices list the same services the proposal did.
+ */
+async function productFor(line: InvoiceLine): Promise<string> {
+  const name = line.name.trim().slice(0, 250) || "Service";
+  const slug = name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "service";
+  const id = `dh_svc_${slug}_${createHash("sha256").update(name).digest("hex").slice(0, 8)}`;
+  const s = stripe();
+  try {
+    const p = await s.products.retrieve(id);
+    if (!p.active) await s.products.update(id, { active: true });
+    return id;
+  } catch (err) {
+    if (!(isStripeError(err) && err.statusCode === 404)) throw err;
+  }
+  try {
+    await s.products.create({ id, name, metadata: { source: "central-dogma-invoice" } });
+  } catch (err) {
+    if (!(isStripeError(err) && err.code === "resource_already_exists")) throw err;
+  }
+  return id;
+}
+
+/**
+ * Start the subscription(s) that bill an invoice's recurring lines from the second period
+ * on, charging the card the settling payment saved. The first charge lands one period after
+ * `paidAt` (the first period was on the invoice). Idempotent: an interval that already has a
+ * subscription — recorded here, or found in Stripe by its invoice metadata — is skipped, so
+ * the page, the webhook and the dashboard can all call it. Throws a PayError with a message
+ * for Brandon when it can't be done automatically.
+ */
+export async function ensureSubscriptions(inv: Invoice, pi: Stripe.PaymentIntent, paidAt: string): Promise<InvoiceSubscription[]> {
+  const missing = missingSubscriptions(inv);
+  if (inv.status !== "paid" || !missing.length) return [];
+  const customer = idOf(pi.customer);
+  const paymentMethod = idOf(pi.payment_method);
+  if (pi.status !== "succeeded" || pi.setup_future_usage !== "off_session" || !customer || !paymentMethod) {
+    throw new PayError("The card on this payment wasn't saved, so the monthly billing can't start by itself — set the subscription up in Stripe.", 409);
+  }
+
+  const s = stripe();
+  const existing = (await s.subscriptions.list({ customer, status: "all", limit: 100 })).data;
+  const out: InvoiceSubscription[] = [];
+  for (const g of missing) {
+    let sub = existing.find((x) => x.metadata?.invoice_id === inv.id && x.metadata?.interval === g.interval);
+    if (!sub) {
+      const anchor = addPeriod(new Date(paidAt), g.interval);
+      if (anchor.getTime() < Date.now() + 10 * 60_000) {
+        throw new PayError(`The first ${g.interval}ly charge (${fmtLongDate(anchor.toISOString().slice(0, 10))}) is already past — set the subscription up in Stripe by hand.`, 409);
+      }
+      const items: Stripe.SubscriptionCreateParams.Item[] = [];
+      for (const l of g.lines) {
+        items.push({ price_data: { currency: "usd", product: await productFor(l), unit_amount: toCents(l.recurring?.amount ?? 0), recurring: { interval: g.interval } }, quantity: 1 });
+      }
+      sub = await s.subscriptions.create(
+        {
+          customer,
+          default_payment_method: paymentMethod,
+          items,
+          // The first period was billed on the invoice: no charge until one period later.
+          billing_cycle_anchor: Math.floor(anchor.getTime() / 1000),
+          proration_behavior: "none",
+          description: `${inv.number} · ${inv.client.name}`.slice(0, 500),
+          metadata: { invoice_id: inv.id, invoice_number: inv.number, interval: g.interval, source: "central-dogma-invoice" },
+        },
+        { idempotencyKey: `sub_${inv.id}_${g.interval}` }
+      );
+    }
+    const rec: InvoiceSubscription = {
+      subscriptionId: sub.id,
+      customerId: customer,
+      interval: g.interval,
+      amount: g.amount,
+      startsAt: new Date(sub.billing_cycle_anchor * 1000).toISOString(),
+      createdAt: new Date(sub.created * 1000).toISOString(),
+      livemode: sub.livemode,
+    };
+    await recordSubscription(inv.id, rec);
+    out.push(rec);
+  }
+  return out;
+}
+
+/** Dashboard retry: start the subscriptions a paid invoice should have but doesn't. */
+export async function retrySubscriptions(inv: Invoice): Promise<Invoice> {
+  if (inv.status !== "paid" || !missingSubscriptions(inv).length || !stripeSecretKey()) return inv;
+  const last = inv.payments[inv.payments.length - 1];
+  if (!last) return inv;
+  const pi = await stripe().paymentIntents.retrieve(last.paymentIntentId);
+  await ensureSubscriptions(inv, pi, last.paidAt);
+  return refreshed(inv.id);
 }
 
 /**
@@ -192,11 +370,13 @@ async function settle(inv: Invoice, pi: Stripe.PaymentIntent): Promise<PayResult
   }
 }
 
-async function openIntent(pis: PaymentIntentRecord[], invoiceId: string): Promise<Stripe.PaymentIntent | null> {
+async function openIntent(pis: PaymentIntentRecord[], invoiceId: string, customer: string | null): Promise<Stripe.PaymentIntent | null> {
   for (const rec of pis.slice(0, 3)) {
     const pi = await stripe().paymentIntents.retrieve(rec.paymentIntentId);
     if (pi.metadata?.invoice_id !== invoiceId) continue;
-    if (REUSABLE.includes(pi.status)) return pi;
+    // Only reuse an intent that saves (or doesn't save) the card the way this payment must.
+    const matches = customer ? pi.setup_future_usage === "off_session" && idOf(pi.customer) === customer : !pi.setup_future_usage;
+    if (REUSABLE.includes(pi.status) && matches) return pi;
     if (pi.status === "requires_action") {
       // An abandoned 3-D Secure attempt: its amount can't be changed, so retire it.
       await stripe().paymentIntents.cancel(pi.id).catch(() => undefined);
@@ -220,13 +400,15 @@ export async function payInvoice(invoiceId: string, confirmationTokenId: string,
   const inv = await reconcileInvoice(found.invoice, found.pis);
   assertPayable(inv);
 
-  const card = await readCard(confirmationTokenId);
+  const card = await readCard(inv, confirmationTokenId);
   const q = quoteFor(inv, card.funding);
   if (toCents(q.total) !== expectedTotalCents) {
     throw new PayError("The amount due changed — please review the new total.", 409, { quote: { ...q, ...card } });
   }
 
   const s = stripe();
+  // Recurring lines: the card is saved to the client's Stripe customer for the subscription.
+  const customer = savesCard(inv) ? await customerFor(inv, found.pis) : null;
   const description = `Invoice ${inv.number} · ${inv.client.name}`.slice(0, 1000);
   const receipt = inv.client.email ? { receipt_email: inv.client.email } : {};
   const metadata = {
@@ -242,7 +424,7 @@ export async function payInvoice(invoiceId: string, confirmationTokenId: string,
 
   // One open PaymentIntent per invoice: a retry after a decline, or a second tab, reuses
   // it — a PaymentIntent can only ever succeed once, so the invoice can't be double-charged.
-  let pi = await openIntent(found.pis, inv.id);
+  let pi = await openIntent(found.pis, inv.id, customer);
   if (!pi) {
     // Stable creation params (base amount, fixed metadata) so the idempotency key is safe
     // to repeat; the real amount is set by the update below.
@@ -254,8 +436,9 @@ export async function payInvoice(invoiceId: string, confirmationTokenId: string,
         description,
         metadata: { invoice_id: inv.id, invoice_number: inv.number, source: "central-dogma-invoice" },
         ...receipt,
+        ...(customer ? { customer, setup_future_usage: "off_session" as const } : {}),
       },
-      { idempotencyKey: `inv_${inv.id}_v${inv.version}_pi${found.pis.length}` }
+      { idempotencyKey: `inv_${inv.id}_v${inv.version}_pi${found.pis.length}${customer ? `_${customer}` : ""}` }
     );
     await recordPaymentIntent(inv.id, pi.id);
   }
@@ -308,5 +491,6 @@ export async function invoicePaymentForCharge(ch: { id: string; payment_intent?:
   if (pi.status !== "succeeded" || pi.metadata?.invoice_id !== invoiceId) return null;
   const payment = paymentFromIntent(pi, await latestCharge(pi));
   await recordPayment(invoiceId, payment);
+  await startSubscriptions(invoiceId, pi, payment.paidAt);
   return { invoice: (await getInvoiceWithIntents(invoiceId))?.invoice ?? found.invoice, payment };
 }

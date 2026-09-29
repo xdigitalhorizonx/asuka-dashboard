@@ -9,12 +9,33 @@ import { round2, type InvoiceLine, type InvoiceParty } from "./types";
 
 export class InvoiceInputError extends Error {}
 
-/** Visa caps credit-card surcharges at 3%; the fee can be lowered or turned off, never raised past it. */
-export const MAX_CARD_FEE_PERCENT = 3;
+/**
+ * The most a credit-card surcharge can ever be here. Digital Horizon's Stripe cost is
+ * 2.9% + 30¢ on every card, so a flat 2.9% never exceeds its real cost — Visa caps a
+ * surcharge at the lower of the merchant's average cost and 3%, Mastercard at its cost.
+ */
+export const MAX_CARD_FEE_PERCENT = 2.9;
+
+/**
+ * The credit-card surcharge in force: INVOICE_CARD_FEE_PERCENT, capped at 2.9%, and 0 —
+ * surcharging OFF — when unset. Visa requires 30 days' written notice to Stripe before the
+ * first surcharge (or before announcing one), so leave it unset until that notice has run.
+ * It is the default for new invoices, the most an invoice may carry, and a cap on what an
+ * existing invoice charges (an invoice saved with a higher fee pays this one).
+ */
+export function cardFeeCeiling(): number {
+  const n = Number(process.env.INVOICE_CARD_FEE_PERCENT ?? 0);
+  return Number.isFinite(n) ? Math.min(Math.max(n, 0), MAX_CARD_FEE_PERCENT) : 0;
+}
 
 export function defaultCardFeePercent(): number {
-  const n = Number(process.env.INVOICE_CARD_FEE_PERCENT ?? 3);
-  return Number.isFinite(n) ? Math.min(Math.max(n, 0), MAX_CARD_FEE_PERCENT) : 3;
+  return cardFeeCeiling();
+}
+
+/** The fee an invoice actually carries today: its own setting, never above the ceiling. */
+export function effectiveCardFeePercent(inv: { cardFeePercent: number }): number {
+  const own = Number(inv.cardFeePercent) || 0;
+  return Math.min(Math.max(own, 0), cardFeeCeiling());
 }
 
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
@@ -67,8 +88,11 @@ export function validateInvoiceInput(raw: unknown): InvoiceInput {
   const dueDate = ymd(o.dueDate);
   if (dueDate && dueDate < issueDate) throw new InvoiceInputError("The due date is before the issue date.");
   const fee = Number(o.cardFeePercent ?? defaultCardFeePercent());
-  if (!Number.isFinite(fee) || fee < 0 || fee > MAX_CARD_FEE_PERCENT) {
-    throw new InvoiceInputError(`Card fee must be between 0% and ${MAX_CARD_FEE_PERCENT}%.`);
+  const ceiling = cardFeeCeiling();
+  if (!Number.isFinite(fee) || fee < 0 || fee > ceiling) {
+    throw new InvoiceInputError(
+      ceiling > 0 ? `Card fee must be between 0% and ${ceiling}%.` : "Card fees are off (INVOICE_CARD_FEE_PERCENT isn't set) — set the card fee to 0%."
+    );
   }
   const src = o.source as { fileName?: unknown; path?: unknown; proposalDate?: unknown } | undefined;
   const source =
