@@ -790,6 +790,16 @@ function DraftEditor({
   const setClient = (k: keyof Draft["client"], v: string) => set({ client: { ...draft.client, [k]: v } });
   const setLine = (i: number, patch: Partial<EditLine>) => set({ lines: draft.lines.map((l, j) => (j === i ? { ...l, ...patch } : l)) });
   const totalsMatch = info?.proposal?.totals.initial != null && round2(info.proposal.totals.initial) === sums.subtotal;
+  // Why Save is off, said beside the button — never a silently dead button. The deposit rule is the server's (validate.ts).
+  const blocked = !draft.client.name.trim()
+    ? "Add the client’s name to save."
+    : total <= 0
+      ? sums.discount > 0
+        ? "The discount covers the whole invoice — lower or clear it to save."
+        : "Add a line with an amount to save."
+      : draft.depositPercent && !split
+        ? "Untick the 50% deposit — there are no one-time items to split."
+        : null;
 
   return (
     <section className="card" style={{ padding: 18, display: "grid", gap: 14, boxShadow: `inset 0 2px 0 0 ${tint(HUE, 70)}` }} aria-label="Invoice draft">
@@ -1081,10 +1091,15 @@ function DraftEditor({
       )}
 
       <div className="draft-actions" style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+        {blocked && (
+          <span id="draft-blocked" role="status" style={{ marginRight: "auto", alignSelf: "center", fontSize: 13, fontWeight: 600, color: "var(--color-amber)" }}>
+            {blocked}
+          </span>
+        )}
         <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={busy}>
           {editing ? "Cancel" : "Discard"}
         </button>
-        <button type="button" className="btn btn-primary" onClick={onSave} disabled={busy || !draft.client.name.trim() || total <= 0} style={{ padding: "10px 18px" }}>
+        <button type="button" className="btn btn-primary" onClick={onSave} disabled={busy || !!blocked} aria-describedby={blocked ? "draft-blocked" : undefined} style={{ padding: "10px 18px" }}>
           {busy ? "Saving…" : editing ? "Save changes" : "Create live invoice"}
         </button>
       </div>
