@@ -19,6 +19,9 @@ const POLL_MS = 20_000;
 /** After a local write, ignore polled server copies for this long so an edge-cached
  *  stale read cannot momentarily "undo" a note the user just typed. */
 const WRITE_SETTLE_MS = 10_000;
+/** Dispatched on `window` after something changed the vault server-side (e.g. a payment recorded on an
+ *  invoice adds it to the Customers tab), so the board pulls now instead of on the next poll. */
+export const PULL_EVENT = "asuka:pull";
 
 const seed: AppState = {
   reminders: [],
@@ -259,10 +262,13 @@ export function useAsukaStore() {
     const onVis = () => {
       if (document.visibilityState === "visible") void pull();
     };
+    const onPull = () => void pull();
     document.addEventListener("visibilitychange", onVis);
+    window.addEventListener(PULL_EVENT, onPull);
     return () => {
       window.clearInterval(id);
       document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener(PULL_EVENT, onPull);
     };
   }, [hydrated, adoptRemote]);
 

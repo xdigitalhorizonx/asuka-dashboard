@@ -20,7 +20,7 @@ export function money(n: number): string {
 }
 
 function methodColor(m: PaymentMethod): string {
-  return m === "card" ? "var(--color-accent)" : m === "check" ? "var(--color-amber)" : "var(--color-green)";
+  return m === "card" ? "var(--color-accent)" : m === "check" ? "var(--color-amber)" : m === "ach" ? "var(--color-sky)" : m === "other" ? "var(--color-muted)" : "var(--color-green)";
 }
 
 function fmtDate(d: string): string {
@@ -349,7 +349,8 @@ function CustomerDetail({ customer, onPatch, onDelete }: { customer: Customer; o
 
         {txOpen && (
           <div style={{ padding: 12, borderRadius: 14, border: `1px solid ${tint("var(--color-mint)", 40)}`, background: tint("var(--color-mint)", 7), display: "grid", gap: 8, marginBottom: 12 }}>
-            <div style={{ display: "flex", gap: 6 }} role="radiogroup" aria-label="Payment method">
+            {/* five methods: one row when there's room, 3 + 2 on a phone (never wider than the form) */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(76px, 1fr))", gap: 6, minWidth: 0 }} role="radiogroup" aria-label="Payment method">
               {PAYMENT_METHODS.map((m) => {
                 const on = tx.method === m.id;
                 return (
@@ -360,7 +361,7 @@ function CustomerDetail({ customer, onPatch, onDelete }: { customer: Customer; o
                     aria-checked={on}
                     className="btn"
                     onClick={() => setTx({ ...tx, method: m.id })}
-                    style={{ flex: 1, color: on ? "var(--color-on-primary)" : methodColor(m.id), background: on ? tint(methodColor(m.id), 18) : undefined, borderColor: on ? methodColor(m.id) : tint(methodColor(m.id), 45) }}
+                    style={{ minWidth: 0, color: on ? "var(--color-on-primary)" : methodColor(m.id), background: on ? tint(methodColor(m.id), 18) : undefined, borderColor: on ? methodColor(m.id) : tint(methodColor(m.id), 45) }}
                   >
                     {m.label}
                   </button>

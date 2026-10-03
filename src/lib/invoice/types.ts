@@ -88,9 +88,24 @@ export interface InvoiceDoc {
   updatedAt: string;
 }
 
-/** A card payment recorded against an invoice (written once per PaymentIntent, never edited). */
+/** Payments Brandon keys in by hand: they arrive outside Stripe, so they carry no card fee. */
+export const OFFLINE_METHODS = ["check", "cash", "ach", "other"] as const;
+export type OfflineMethod = (typeof OFFLINE_METHODS)[number];
+export const OFFLINE_METHOD_LABELS: Record<OfflineMethod, string> = { check: "Check", cash: "Cash", ach: "ACH / bank transfer", other: "Other" };
+
+/**
+ * A payment on an invoice, written once and never edited: a card payment (one per
+ * PaymentIntent), or a check / cash / ACH / other payment recorded in the dashboard.
+ */
 export interface InvoicePayment {
+  /** Unique per payment: the Stripe PaymentIntent id for a card payment, `off_…` for one recorded by hand. */
   paymentIntentId: string;
+  /** Absent on card payments; set on payments recorded by hand. */
+  method?: "card" | OfflineMethod;
+  /** Recorded payments: check number, ACH reference, or what "other" was (shown on the invoice). */
+  reference?: string;
+  /** Recorded payments: when Brandon keyed it in (`paidAt` is the date it was received). */
+  recordedAt?: string;
   chargeId?: string;
   /** Dollars actually charged, card fee included. */
   amount: number;
@@ -220,6 +235,19 @@ export function paymentPart(inv: Pick<Invoice, "deposit">): PaymentPart {
   return inv.deposit ? (inv.deposit.paidAt ? "balance" : "deposit") : "";
 }
 
+/** A card payment (taken through Stripe), as opposed to one recorded by hand. */
+export function isCardPayment(p: Pick<InvoicePayment, "method">): boolean {
+  return !p.method || p.method === "card";
+}
+
+/** "Check #1042", "Cash", "ACH / bank transfer · 88812", "Other · Zelle" — a payment recorded by hand. */
+export function offlinePaymentLabel(p: Pick<InvoicePayment, "method" | "reference">): string {
+  const method: OfflineMethod = p.method && p.method !== "card" ? p.method : "other";
+  const ref = (p.reference ?? "").trim();
+  if (method === "check") return ref ? `Check #${ref.replace(/^(?:no\.?|#)\s*/i, "")}` : "Check";
+  return ref ? `${OFFLINE_METHOD_LABELS[method]} · ${ref}` : OFFLINE_METHOD_LABELS[method];
+}
+
 /** "Discount (10%)" or "Discount". */
 export function discountLabel(d: InvoiceDiscount): string {
   return d.kind === "percent" ? `Discount (${round2(d.value)}%)` : "Discount";
@@ -309,7 +337,9 @@ export function recurringGroups(lines: InvoiceLine[]): RecurringGroup[] {
 /**
  * The payment that covers the recurring lines' first period saves the card for the
  * subscription: the invoice's first payment (a deposit invoice's deposit). A later balance
- * payment doesn't — the subscription already has its card.
+ * payment doesn't — the subscription already has its card. A check / cash / ACH payment
+ * recorded by hand counts as that first payment: it saves no card, so the monthly billing
+ * then has to be set up separately (the dashboard says so).
  */
 export function savesCard(inv: Pick<Invoice, "lines" | "payments">): boolean {
   return recurringGroups(inv.lines).length > 0 && inv.payments.length === 0;

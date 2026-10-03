@@ -16,7 +16,9 @@ import {
   fmtLongDate,
   fmtMoney,
   invoiceTotals,
+  isCardPayment,
   localYmd,
+  offlinePaymentLabel,
   recurringGroups,
   round2,
   savesCard,
@@ -41,7 +43,7 @@ async function load(id: string): Promise<Invoice | null> {
   const found = await fetchInvoice(id);
   if (!found) return null;
   // Catch up on a payment Stripe finished but this page never heard about (closed tab, missed webhook).
-  if (found.invoice.status === "open" && found.pis.length > found.invoice.payments.length) {
+  if (found.invoice.status === "open" && found.pis.length > found.invoice.payments.filter(isCardPayment).length) {
     return reconcileInvoice(found.invoice, found.pis).catch(() => found.invoice);
   }
   return found.invoice;
@@ -90,7 +92,8 @@ export default async function InvoicePage({ params }: Props) {
     : [];
   const per = (i: "month" | "year") => (i === "month" ? "month" : "year");
   // The card the subscription bills: the payment that saved it (a deposit invoice’s balance card isn’t).
-  const cardOnFile = inv.payments.filter((p) => p.customerId).pop() ?? inv.payments[inv.payments.length - 1];
+  const cards = inv.payments.filter(isCardPayment);
+  const cardOnFile = cards.filter((p) => p.customerId).pop() ?? cards[cards.length - 1];
 
   return (
     <div className={`${s.page} ${inter.variable} ${nunito.variable}`}>
@@ -277,9 +280,16 @@ export default async function InvoicePage({ params }: Props) {
                 {inv.payments.map((p) => (
                   <div key={p.paymentIntentId} className={s.payment}>
                     <span>
-                      {fmtLongDate(localYmd(p.paidAt))} · {brandName(p.brand)}
-                      {p.funding && p.funding !== "unknown" ? ` ${p.funding}` : ""}
-                      {p.last4 ? ` ••${p.last4}` : ""}
+                      {fmtLongDate(localYmd(p.paidAt))} ·{" "}
+                      {isCardPayment(p) ? (
+                        <>
+                          {brandName(p.brand)}
+                          {p.funding && p.funding !== "unknown" ? ` ${p.funding}` : ""}
+                          {p.last4 ? ` ••${p.last4}` : ""}
+                        </>
+                      ) : (
+                        offlinePaymentLabel(p)
+                      )}
                       {p.part ? ` · ${p.part === "deposit" ? "Deposit" : "Balance"}` : ""}
                     </span>
                     <strong>{fmtMoney(p.amount)}</strong>

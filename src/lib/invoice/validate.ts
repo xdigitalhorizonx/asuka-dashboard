@@ -1,5 +1,18 @@
+import { randomId } from "../blobstore";
 import { PROPOSALS_PREFIX, type InvoiceInput } from "./store";
-import { depositSplit, fmtMoney, invoiceTotals, MIN_CHARGE, round2, sumLines, type InvoiceDiscount, type InvoiceLine, type InvoiceParty } from "./types";
+import {
+  depositSplit,
+  fmtMoney,
+  invoiceTotals,
+  MIN_CHARGE,
+  OFFLINE_METHODS,
+  round2,
+  sumLines,
+  type InvoiceDiscount,
+  type InvoiceLine,
+  type InvoiceParty,
+  type OfflineMethod,
+} from "./types";
 
 /**
  * Everything the dashboard posts to create or edit an invoice passes through here:
@@ -47,7 +60,12 @@ export function effectiveCardFeePercent(inv: { cardFeePercent: number }): number
 }
 
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
-const ymd = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`)) ? v : "");
+/** "YYYY-MM-DD" that is a real calendar day (V8 would roll Feb 31 over to March 3), else "". */
+const ymd = (v: unknown) => {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return "";
+  const d = new Date(`${v}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v ? v : "";
+};
 
 function money(v: unknown, label: string): number {
   const n = typeof v === "number" ? v : Number(String(v ?? "").replace(/[$,\s]/g, ""));
@@ -107,6 +125,38 @@ function deposit(v: unknown, lines: InvoiceLine[], disc: InvoiceDiscount | undef
   if (!split) throw new InvoiceInputError(`${pct}% deposit: there are no one-time items to split — add one or untick the deposit.`);
   if (split.now < MIN_CHARGE || split.later < MIN_CHARGE) throw new InvoiceInputError(`${pct}% deposit: each payment must be at least ${fmtMoney(MIN_CHARGE)}.`);
   return pct;
+}
+
+/** A check / cash / ACH / other payment as Brandon keys it in on the Invoices tab. */
+export interface RecordedPaymentInput {
+  method: OfflineMethod;
+  amount: number;
+  /** "YYYY-MM-DD" it was received, on Digital Horizon's calendar. */
+  date: string;
+  /** Check number, ACH reference, or what "other" was. May be "". */
+  reference: string;
+  /** The form's id for this submission: a double-click or a retried request records it once. */
+  requestId: string;
+}
+
+/** `today` is Digital Horizon's calendar date ("YYYY-MM-DD"); a payment can't be received after it. */
+export function validateRecordedPayment(raw: unknown, today: string): RecordedPaymentInput {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  const method = OFFLINE_METHODS.find((m) => m === o.method);
+  if (!method) throw new InvoiceInputError("Pick how it was paid: check, cash, ACH or other.");
+  const amount = money(o.amount, "Amount");
+  if (amount <= 0) throw new InvoiceInputError("Amount: enter what was paid.");
+  const date = ymd(o.date);
+  if (!date || date < "2020-01-01") throw new InvoiceInputError("Date received: pick the day it came in.");
+  if (date > today) throw new InvoiceInputError("Date received can't be in the future.");
+  // Control characters out (by code point), then trimmed.
+  const reference = [...(typeof o.reference === "string" ? o.reference : "")]
+    .map((ch) => (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? " " : ch))
+    .join("")
+    .trim();
+  if (reference.length > 60) throw new InvoiceInputError("Reference: keep it to 60 characters.");
+  const requestId = typeof o.requestId === "string" && /^[A-Za-z0-9]{12,40}$/.test(o.requestId) ? o.requestId : randomId(16);
+  return { method, amount, date, reference, requestId };
 }
 
 export function validateInvoiceInput(raw: unknown): InvoiceInput {

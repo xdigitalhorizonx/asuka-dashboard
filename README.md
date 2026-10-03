@@ -195,8 +195,9 @@ Browser UI uses same-origin `GET/POST /api/state` (session cookie, or `Authoriza
 ## Invoices
 
 **Flow:** Invoices tab → drop the proposal PDF → review (client, dates, lines and what repeats monthly, notes) →
-**Create live invoice** → copy / open / email the link. Edit (until paid), void, restore, delete
-(unpaid only), *Check Stripe for payment*, download the PDF and open the source proposal from the row menu.
+**Create live invoice** → copy / open / email the link. Edit (until paid), *Record check / cash / ACH*,
+void, restore, delete (unpaid only), *Check Stripe for payment*, download the PDF and open the source
+proposal from the row menu.
 
 - **Parsing** (`src/lib/proposal/parse.ts`) reads the PDFs made by the Digital Horizon proposal
   generator (`digital-horizon/lib/proposal/pdf.tsx`) by text *position*, and cross-checks every line
@@ -248,9 +249,22 @@ Browser UI uses same-origin `GET/POST /api/state` (session cookie, or `Authoriza
   from the Stripe webhook (`charge.succeeded`). Each invoice reuses one open PaymentIntent, so a
   retry or a second tab can't double-charge. Paid invoices also land on the Customers tab under the
   invoice's client (keyed by charge id, so the Stripe sync never duplicates them).
+- **Check / cash / ACH / other payments** (row menu → *Record check / cash / ACH*): key in the
+  method, amount (prefilled with what's due now — a deposit invoice's deposit, else the balance),
+  date received and an optional check number / reference. It counts toward the balance exactly like
+  a card payment (no card fee): a deposit-sized check marks the deposit paid and leaves the balance
+  due, the full amount marks the invoice paid, anything less leaves the rest due. More than the
+  balance is refused. It shows on the public page and PDF ("Check #1042") and lands on the client's
+  Customers tab (`t_off_…`, never touched by the Stripe sync). A mistyped one can be removed again
+  (the panel's *Remove*; card payments are refunded in Stripe instead). Each submission carries an id,
+  so a double-click records it once. `src/lib/invoice/offline.ts`, `POST /api/invoices/<id>/payments`,
+  `DELETE /api/invoices/<id>/payments/<paymentId>`. An invoice with monthly lines whose first
+  payment was recorded this way saves no card, so its monthly billing doesn't start by itself — the
+  row says so (bill the monthly on a card invoice).
 - **Storage** (`src/lib/invoice/store.ts`) never overwrites anything: every edit/void writes
-  `invoices/<id>/doc-<version>.json`, payments are `pay-<pi>.json`, invoice numbers (`DH-1001`, …)
-  are claimed as `invoice-numbers/<n>.json`. Two concurrent edits can't both win.
+  `invoices/<id>/doc-<version>.json`, card payments are `pay-<pi>.json` and recorded ones
+  `pay-off_<id>.json`, invoice numbers (`DH-1001`, …) are claimed as `invoice-numbers/<n>.json`.
+  Two concurrent edits can't both win.
 - **Not handled yet:** a refund made in Stripe doesn't re-open the invoice (it does update the
   Customers tab via the webhook) or cancel its subscription.
 

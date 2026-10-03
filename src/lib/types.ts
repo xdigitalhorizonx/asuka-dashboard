@@ -119,12 +119,14 @@ export interface Lead {
   updatedAt: string;
 }
 
-export type PaymentMethod = "check" | "cash" | "card";
+export type PaymentMethod = "check" | "cash" | "card" | "ach" | "other";
 
 export const PAYMENT_METHODS: { id: PaymentMethod; label: string }[] = [
   { id: "check", label: "Check" },
   { id: "cash", label: "Cash" },
   { id: "card", label: "Card" },
+  { id: "ach", label: "ACH" },
+  { id: "other", label: "Other" },
 ];
 
 export interface Transaction {
@@ -214,7 +216,7 @@ export function normalizeLead(raw: Partial<Lead> & { id: string; name: string })
 }
 
 export function isPaymentMethod(v: unknown): v is PaymentMethod {
-  return v === "check" || v === "cash" || v === "card";
+  return v === "check" || v === "cash" || v === "card" || v === "ach" || v === "other";
 }
 
 function str(v: unknown): string {

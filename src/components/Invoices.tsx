@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { tint, localToday } from "@/lib/crm";
 import { haptic } from "@/lib/haptics";
+import { PULL_EVENT } from "@/lib/store";
 import type { PaymentsStatus } from "@/lib/invoice/payments";
 import type { InvoiceInput } from "@/lib/invoice/store";
 import {
@@ -11,13 +12,19 @@ import {
   firstPeriods,
   fmtMoney,
   invoiceTotals,
+  isCardPayment,
   localYmd,
+  OFFLINE_METHOD_LABELS,
+  OFFLINE_METHODS,
+  offlinePaymentLabel,
   recurringGroups,
   round2,
   subscriptionsDue,
   type Invoice,
   type InvoiceDiscount,
   type InvoiceLine,
+  type InvoicePayment,
+  type OfflineMethod,
   type RecurringInterval,
 } from "@/lib/invoice/types";
 import { Icon } from "./icons";
@@ -52,6 +59,10 @@ const PER: Record<RecurringInterval, string> = { month: "mo", year: "yr" };
 /** Paid (or its deposit is), has recurring lines, but not every interval has its subscription yet. */
 function missingSubs(inv: Invoice): boolean {
   return subscriptionsDue(inv) && recurringGroups(inv.lines).some((g) => !inv.subscriptions.some((s) => s.interval === g.interval));
+}
+/** Paid by check / cash / ACH only: no card was saved, so there's nothing to retry in Stripe. */
+function noCardForSubs(inv: Invoice): boolean {
+  return missingSubs(inv) && !inv.payments.some(isCardPayment);
 }
 function stripeSubUrl(id: string, live?: boolean): string {
   return `https://dashboard.stripe.com/${live ? "" : "test/"}subscriptions/${id}`;
@@ -148,6 +159,8 @@ export function Invoices() {
   const [busy, setBusy] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [created, setCreated] = useState<Invoice | null>(null);
+  /** The invoice whose Record-payment panel is open (looked up in the list, so it stays current). */
+  const [payingId, setPayingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [drag, setDrag] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -203,6 +216,7 @@ export function Invoices() {
     setFormError(null);
     setCreated(null);
     setEditing(null);
+    setPayingId(null);
     if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") {
       setFormError(`${file.name} isn't a PDF — drop the proposal PDF.`);
       return;
@@ -232,6 +246,7 @@ export function Invoices() {
   function startBlank() {
     setCreated(null);
     setEditing(null);
+    setPayingId(null);
     setParseInfo(null);
     setFormError(null);
     setDraft(blankDraft(feeDefault));
@@ -239,6 +254,7 @@ export function Invoices() {
 
   function startEdit(inv: Invoice) {
     setCreated(null);
+    setPayingId(null);
     setParseInfo(null);
     setFormError(null);
     setEditing(inv);
@@ -257,6 +273,21 @@ export function Invoices() {
       discountKind: discount?.kind ?? "percent",
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  /** Open the Record-payment panel (check, cash, ACH, other) for one invoice. */
+  function startPayment(inv: Invoice) {
+    setDraft(null);
+    setEditing(null);
+    setParseInfo(null);
+    setFormError(null);
+    setCreated(null);
+    setPayingId(inv.id);
+  }
+
+  /** Show an invoice the server just returned before the next list refresh lands. */
+  function putInvoice(inv: Invoice) {
+    setData((d) => (d ? { ...d, invoices: d.invoices.map((i) => (i.id === inv.id ? inv : i)) } : d));
   }
 
   function draftToInput(d: Draft): InvoiceInput | string {
@@ -319,10 +350,13 @@ export function Invoices() {
 
   async function act(inv: Invoice, action: "void" | "unvoid" | "delete" | "refresh") {
     // Voiding touches nothing in Stripe: say what keeps going (a deposit invoice can be voided after its deposit).
+    const byCard = round2(inv.payments.filter(isCardPayment).reduce((s, p) => s + p.amount - p.fee, 0));
+    const byHand = round2(inv.paid - byCard);
     const stripeNote = [
-      inv.paid > 0 ? ` The ${fmtMoney(inv.paid)} already paid isn't refunded.` : "",
+      byCard > 0 ? ` The ${fmtMoney(byCard)} paid by card isn't refunded.` : "",
+      byHand > 0 ? ` The ${fmtMoney(byHand)} recorded by check/cash/ACH stays recorded.` : "",
       inv.subscriptions.length ? " Its subscription keeps billing." : "",
-      inv.paid > 0 || inv.subscriptions.length ? " Do those in Stripe." : "",
+      byCard > 0 || inv.subscriptions.length ? " Do those in Stripe." : "",
     ].join("");
     if (action === "void" && !window.confirm(`Void ${inv.number}? The link will show it as void and it can't be paid.${stripeNote}`)) return;
     if (action === "delete" && !window.confirm(`Delete ${inv.number} for good? Its link stops working.`)) return;
@@ -380,7 +414,8 @@ export function Invoices() {
   }
 
   const invoices = data?.invoices ?? [];
-  const outstanding = round2(invoices.filter((i) => i.status === "open").reduce((s, i) => s + i.balance, 0));
+  const paying = payingId ? (invoices.find((i) => i.id === payingId) ?? null) : null;
+  const outstanding =round2(invoices.filter((i) => i.status === "open").reduce((s, i) => s + i.balance, 0));
   const ym = localToday().slice(0, 7);
   const collected = round2(invoices.flatMap((i) => i.payments).filter((p) => localYmd(p.paidAt).slice(0, 7) === ym).reduce((s, p) => s + p.amount, 0));
   const pay = data?.payments;
@@ -416,7 +451,7 @@ export function Invoices() {
       <div className="tiles-3">
         {[
           { l: "Outstanding", v: fmtMoney(outstanding), d: `${invoices.filter((i) => i.status === "open").length} open`, hue: "var(--color-teal)" },
-          { l: "Collected · this month", v: fmtMoney(collected), d: "card payments on invoices", hue: "var(--color-mint)" },
+          { l: "Collected · this month", v: fmtMoney(collected), d: "card, check, cash & ACH on invoices", hue: "var(--color-mint)" },
           { l: "Invoices", v: String(invoices.length), d: `${invoices.filter((i) => i.status === "paid").length} paid`, hue: "var(--color-sky)" },
         ].map((t) => (
           <div key={t.l} className="card" style={{ padding: 18, boxShadow: `inset 0 2px 0 0 ${tint(t.hue, 70)}` }}>
@@ -431,7 +466,7 @@ export function Invoices() {
         ))}
       </div>
 
-      {!draft && (
+      {!draft && !paying && (
         <div
           role="button"
           tabIndex={0}
@@ -543,6 +578,21 @@ export function Invoices() {
         />
       )}
 
+      {paying && !draft && (
+        <PaymentPanel
+          key={paying.id}
+          inv={paying}
+          onClose={() => setPayingId(null)}
+          onSaved={(inv, message) => {
+            putInvoice(inv);
+            setNotice(message);
+            void load();
+            // The payment also changed the client's Customers tab on the server: show it now.
+            window.dispatchEvent(new Event(PULL_EVENT));
+          }}
+        />
+      )}
+
       {notice && (
         <p role="status" style={{ margin: 0, fontSize: 13, fontWeight: 500, color: "var(--color-accent)" }}>
           {notice}{" "}
@@ -596,9 +646,15 @@ export function Invoices() {
                     {inv.subscriptions.map((s) => ` · ${fmtMoney(s.amount)}/${PER[s.interval]} from ${fmtShortDate(localYmd(s.startsAt))}`).join("")}
                     {inv.status === "open" && !inv.subscriptions.length && recurringGroups(inv.lines).map((g) => ` · then ${fmtMoney(g.amount)}/${PER[g.interval]}`).join("")}
                   </span>
-                  {missingSubs(inv) && (
-                    <span style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--color-amber)" }}>⚠ Monthly billing not set up — use More → Set up monthly billing</span>
-                  )}
+                  {missingSubs(inv) &&
+                    (noCardForSubs(inv) ? (
+                      <span style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--color-amber)", whiteSpace: "normal" }}>
+                        Paid by check/cash/ACH — no card on file, so the {recurringGroups(inv.lines).map((g) => `${fmtMoney(g.amount)}/${PER[g.interval]}`).join(" + ")}{" "}
+                        isn&rsquo;t billed automatically. Bill it on a card invoice.
+                      </span>
+                    ) : (
+                      <span style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--color-amber)" }}>⚠ Monthly billing not set up — use More → Set up monthly billing</span>
+                    ))}
                 </span>
                 <span className="hide-sm" style={{ fontSize: 13, color: "var(--color-muted)", whiteSpace: "nowrap" }}>
                   {fmtShortDate(inv.issueDate)}
@@ -630,6 +686,7 @@ export function Invoices() {
                     inv={inv}
                     busy={!!rowBusy}
                     onEdit={() => startEdit(inv)}
+                    onPayments={() => startPayment(inv)}
                     onAct={(a) => void act(inv, a)}
                     mailto={inv.client.email && inv.status === "open" ? mailto(inv) : null}
                   />
@@ -645,7 +702,14 @@ export function Invoices() {
                 <a className="btn" href={linkFor(inv)} target="_blank" rel="noopener" style={{ minHeight: 32, padding: "6px 10px", textDecoration: "none" }}>
                   Open ↗
                 </a>
-                <RowMenu inv={inv} busy={!!rowBusy} onEdit={() => startEdit(inv)} onAct={(a) => void act(inv, a)} mailto={inv.client.email && inv.status === "open" ? mailto(inv) : null} />
+                <RowMenu
+                  inv={inv}
+                  busy={!!rowBusy}
+                  onEdit={() => startEdit(inv)}
+                  onPayments={() => startPayment(inv)}
+                  onAct={(a) => void act(inv, a)}
+                  mailto={inv.client.email && inv.status === "open" ? mailto(inv) : null}
+                />
               </div>
             </div>
           );
@@ -655,7 +719,21 @@ export function Invoices() {
   );
 }
 
-function RowMenu({ inv, busy, onEdit, onAct, mailto }: { inv: Invoice; busy: boolean; onEdit: () => void; onAct: (a: "void" | "unvoid" | "delete" | "refresh") => void; mailto: string | null }) {
+function RowMenu({
+  inv,
+  busy,
+  onEdit,
+  onPayments,
+  onAct,
+  mailto,
+}: {
+  inv: Invoice;
+  busy: boolean;
+  onEdit: () => void;
+  onPayments: () => void;
+  onAct: (a: "void" | "unvoid" | "delete" | "refresh") => void;
+  mailto: string | null;
+}) {
   const [open, setOpen] = useState(false);
   /** Open upward when the row sits too close to the bottom of the window for the menu to fit. */
   const [up, setUp] = useState(false);
@@ -675,8 +753,8 @@ function RowMenu({ inv, busy, onEdit, onAct, mailto }: { inv: Invoice; busy: boo
   }, [open]);
   const item: CSSProperties = { display: "block", width: "100%", textAlign: "left", padding: "8px 12px", background: "transparent", border: 0, color: "inherit", font: "inherit", fontSize: 14, cursor: "pointer", textDecoration: "none", borderRadius: 8 };
   const unpaid = inv.payments.length === 0;
-  // Worst case is 7 items at ~37px each plus the menu's padding and gap.
-  const MENU_PX = 290;
+  // Worst case is 8 items at ~37px each plus the menu's padding and gap.
+  const MENU_PX = 330;
   return (
     <div ref={ref} style={{ position: "relative" }}>
       <button
@@ -709,6 +787,16 @@ function RowMenu({ inv, busy, onEdit, onAct, mailto }: { inv: Invoice; busy: boo
               Email the link
             </a>
           )}
+          {inv.status === "open" && (
+            <button role="menuitem" type="button" style={item} onClick={onPayments}>
+              Record check / cash / ACH
+            </button>
+          )}
+          {inv.status !== "open" && !unpaid && (
+            <button role="menuitem" type="button" style={item} onClick={onPayments}>
+              Payments
+            </button>
+          )}
           {inv.status === "open" && unpaid && (
             <button role="menuitem" type="button" style={item} onClick={onEdit}>
               Edit
@@ -719,7 +807,7 @@ function RowMenu({ inv, busy, onEdit, onAct, mailto }: { inv: Invoice; busy: boo
               Check Stripe for payment
             </button>
           )}
-          {missingSubs(inv) && (
+          {missingSubs(inv) && !noCardForSubs(inv) && (
             <button role="menuitem" type="button" style={{ ...item, color: "var(--color-amber)" }} onClick={() => onAct("refresh")}>
               Set up monthly billing
             </button>
@@ -752,6 +840,280 @@ function RowMenu({ inv, busy, onEdit, onAct, mailto }: { inv: Invoice; busy: boo
         </div>
       )}
     </div>
+  );
+}
+
+/* ── Record a check / cash / ACH / other payment ── */
+
+const METHOD_HUE: Record<OfflineMethod, string> = { check: "var(--color-amber)", cash: "var(--color-green)", ach: "var(--color-sky)", other: "var(--color-muted)" };
+const METHOD_SHORT: Record<OfflineMethod, string> = { check: "Check", cash: "Cash", ach: "ACH", other: "Other" };
+const METHOD_WORD: Record<OfflineMethod, string> = { check: "check", cash: "cash", ach: "ACH payment", other: "payment" };
+const REF_LABEL: Record<OfflineMethod, string> = { check: "Check number", cash: "Note (optional)", ach: "Reference (optional)", other: "What was it? (e.g. Zelle)" };
+
+/** Today on Digital Horizon's calendar (Carson City) — the day the server checks "not in the future" against, whatever zone this device is in. */
+function dhToday(): string {
+  return localYmd(new Date().toISOString());
+}
+
+/** One id per submission, so a double-click or a retried request records the payment once. */
+function newRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID().replace(/-/g, "");
+  return Array.from({ length: 24 }, () => "abcdefghijklmnopqrstuvwxyz0123456789"[Math.floor(Math.random() * 36)]).join("");
+}
+
+/** "Visa credit ••4242" for the dashboard's payment list. */
+function cardLabel(p: InvoicePayment): string {
+  const brand = p.brand ? p.brand.charAt(0).toUpperCase() + p.brand.slice(1) : "Card";
+  return [brand, p.funding && p.funding !== "unknown" ? p.funding : "", p.last4 ? `••${p.last4}` : ""].filter(Boolean).join(" ");
+}
+
+function PaymentPanel({ inv, onClose, onSaved }: { inv: Invoice; onClose: () => void; onSaved: (inv: Invoice, message: string) => void }) {
+  const open = inv.status === "open";
+  const depositOwed = open && !!inv.deposit && !inv.deposit.paidAt;
+  const [method, setMethod] = useState<OfflineMethod>("check");
+  // What's due now: a deposit invoice's deposit until it's in, then the balance.
+  const [amountText, setAmountText] = useState(() => (inv.dueNow > 0 ? inv.dueNow.toFixed(2) : ""));
+  const [date, setDate] = useState(dhToday);
+  const [reference, setReference] = useState("");
+  const [requestId, setRequestId] = useState(newRequestId);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const ref = useRef<HTMLElement>(null);
+  // Opened from a row far down the list (or under the stacked tiles on a phone): bring it into view.
+  useEffect(() => {
+    ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
+  const amount = parseAmount(amountText);
+  const valid = Number.isFinite(amount) && amount > 0;
+  const left = valid ? round2(inv.balance - amount) : inv.balance;
+  const blocked = !amountText.trim()
+    ? "Enter the amount."
+    : !valid
+      ? "That amount doesn't look right."
+      : amount > inv.balance
+        ? `That's more than the ${fmtMoney(inv.balance)} still owed.`
+        : !date
+          ? "Pick the date it was received."
+          : date > dhToday()
+            ? "The date received can't be in the future."
+            : null;
+  const effect = blocked
+    ? ""
+    : left <= 0
+      ? `Marks ${inv.number} paid in full.`
+      : depositOwed && amount >= inv.dueNow
+        ? `Covers the deposit — ${fmtMoney(left)} stays due as the balance.`
+        : depositOwed
+          ? `Part of the deposit — ${fmtMoney(round2(inv.dueNow - amount))} of it, ${fmtMoney(left)} in all, still due.`
+          : `Leaves ${fmtMoney(left)} due.`;
+
+  async function record() {
+    if (blocked) return;
+    setBusy("record");
+    setError(null);
+    const r = await jsonFetch<{ invoice: Invoice }>(`/api/invoices/${inv.id}/payments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method, amount, date, reference, requestId }),
+    });
+    setBusy(null);
+    if (!r.ok || !r.data.invoice) {
+      setError(r.data.error || `Couldn't record it (HTTP ${r.status}).`);
+      return;
+    }
+    const after = r.data.invoice;
+    haptic("save");
+    setAmountText(after.dueNow > 0 ? after.dueNow.toFixed(2) : "");
+    setReference("");
+    setRequestId(newRequestId());
+    onSaved(
+      after,
+      after.status === "paid"
+        ? `${inv.number} is paid in full — ${fmtMoney(amount)} ${METHOD_WORD[method]} recorded.`
+        : `${fmtMoney(amount)} ${METHOD_WORD[method]} recorded on ${inv.number} — ${fmtMoney(after.balance)} still due.`
+    );
+  }
+
+  async function remove(p: InvoicePayment) {
+    if (!window.confirm(`Remove the ${fmtMoney(p.amount)} ${offlinePaymentLabel(p)} payment from ${inv.number}? The balance goes back up and it comes off the Customers tab.`)) return;
+    setBusy(`rm:${p.paymentIntentId}`);
+    setError(null);
+    const r = await jsonFetch<{ invoice: Invoice }>(`/api/invoices/${inv.id}/payments/${p.paymentIntentId}`, { method: "DELETE" });
+    setBusy(null);
+    if (!r.ok || !r.data.invoice) {
+      setError(r.data.error || `Couldn't remove it (HTTP ${r.status}).`);
+      return;
+    }
+    const after = r.data.invoice;
+    setAmountText(after.dueNow > 0 ? after.dueNow.toFixed(2) : "");
+    onSaved(after, `Removed the ${fmtMoney(p.amount)} payment from ${inv.number} — ${fmtMoney(after.balance)} due.`);
+  }
+
+  return (
+    <section
+      ref={ref}
+      className="card"
+      style={{ padding: 18, display: "grid", gap: 14, boxShadow: `inset 0 2px 0 0 ${tint(HUE, 70)}`, scrollMarginTop: 12 }}
+      aria-label={`Payments on ${inv.number}`}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+        <h2 className="card-title" style={{ margin: 0 }}>
+          {open ? "Record a payment" : "Payments"} · {inv.number}
+        </h2>
+        <span style={{ fontSize: 13, color: "var(--color-muted)" }}>{inv.client.name}</span>
+      </div>
+
+      <div style={{ display: "flex", gap: "6px 18px", flexWrap: "wrap", fontSize: 14 }}>
+        <span>
+          Total <strong>{fmtMoney(inv.total)}</strong>
+        </span>
+        <span>
+          Paid <strong>{fmtMoney(inv.paid)}</strong>
+        </span>
+        <span>
+          Balance <strong style={{ color: HUE }}>{fmtMoney(inv.balance)}</strong>
+        </span>
+        {depositOwed && inv.deposit && (
+          <span>
+            {inv.deposit.percent}% deposit due now <strong>{fmtMoney(inv.dueNow)}</strong>
+          </span>
+        )}
+        {inv.status !== "open" && <span style={{ color: "var(--color-muted)" }}>{inv.status === "paid" ? "Paid in full" : "Void"}</span>}
+      </div>
+
+      {open && (
+        <>
+          <div role="radiogroup" aria-label="How it was paid" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {OFFLINE_METHODS.map((m) => {
+              const on = method === m;
+              const hue = METHOD_HUE[m];
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  aria-label={OFFLINE_METHOD_LABELS[m]}
+                  className="btn"
+                  onClick={() => setMethod(m)}
+                  style={{ flex: "1 1 64px", color: on ? "var(--color-on-primary)" : hue, background: on ? tint(hue, 18) : undefined, borderColor: on ? hue : tint(hue, 45) }}
+                >
+                  {METHOD_SHORT[m]}
+                </button>
+              );
+            })}
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, alignItems: "start" }}>
+            <label style={{ display: "grid", gap: 4, minWidth: 0 }}>
+              <span className="label">Amount</span>
+              <input
+                className="input money"
+                inputMode="decimal"
+                value={amountText}
+                onChange={(e) => setAmountText(e.target.value)}
+                onBlur={() => valid && setAmountText(amount.toFixed(2))}
+                aria-label="Payment amount"
+                style={{ textAlign: "right" }}
+              />
+            </label>
+            <label style={{ display: "grid", gap: 4, minWidth: 0 }}>
+              <span className="label">Date received</span>
+              <input className="input" type="date" value={date} max={dhToday()} onChange={(e) => setDate(e.target.value)} aria-label="Date received" />
+            </label>
+            <label style={{ display: "grid", gap: 4, minWidth: 0 }}>
+              <span className="label">{REF_LABEL[method]}</span>
+              <input
+                className="input"
+                value={reference}
+                maxLength={60}
+                onChange={(e) => setReference(e.target.value)}
+                placeholder={method === "check" ? "e.g. 1042" : ""}
+                aria-label={REF_LABEL[method]}
+              />
+            </label>
+          </div>
+
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {depositOwed && (
+              <button type="button" className={`btn${valid && amount === inv.dueNow ? " btn-primary" : ""}`} onClick={() => setAmountText(inv.dueNow.toFixed(2))}>
+                Deposit {fmtMoney(inv.dueNow)}
+              </button>
+            )}
+            <button type="button" className={`btn${valid && amount === inv.balance ? " btn-primary" : ""}`} onClick={() => setAmountText(inv.balance.toFixed(2))}>
+              Full balance {fmtMoney(inv.balance)}
+            </button>
+          </div>
+
+          <div style={{ display: "grid", gap: 4, fontSize: 14 }}>
+            {effect && <span style={{ fontWeight: 600, color: left <= 0 ? "var(--color-green)" : HUE }}>{effect}</span>}
+            <span style={{ fontSize: 13, color: "var(--color-muted)" }}>
+              Shows on the invoice link and PDF, and goes on {inv.client.name || "the client"}&rsquo;s Customers tab — don&rsquo;t enter it there too.
+            </span>
+          </div>
+        </>
+      )}
+
+      {inv.payments.length > 0 && (
+        <div style={{ display: "grid", gap: 6 }}>
+          <div className="label">Payments on this invoice</div>
+          {inv.payments.map((p) => (
+            <div key={p.paymentIntentId} style={{ display: "flex", gap: "4px 10px", alignItems: "center", flexWrap: "wrap", padding: "8px 10px", borderRadius: 12, border: "1px solid var(--color-border)" }}>
+              <span style={{ fontSize: 13, color: "var(--color-muted)", whiteSpace: "nowrap" }}>{fmtShortDate(localYmd(p.paidAt))}</span>
+              <span style={{ flex: "1 1 160px", minWidth: 0 }}>
+                {isCardPayment(p) ? cardLabel(p) : offlinePaymentLabel(p)}
+                {p.part ? ` · ${p.part === "deposit" ? "Deposit" : "Balance"}` : ""}
+              </span>
+              <strong className="money">{fmtMoney(p.amount)}</strong>
+              {isCardPayment(p) ? (
+                <span style={{ fontSize: 12, color: "var(--color-muted)" }}>card · refunds in Stripe</span>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => void remove(p)}
+                  disabled={!!busy}
+                  aria-label={`Remove the ${fmtMoney(p.amount)} ${offlinePaymentLabel(p)} payment`}
+                  style={{ minHeight: 32, padding: "4px 10px", color: "var(--color-danger)" }}
+                >
+                  {busy === `rm:${p.paymentIntentId}` ? "Removing…" : "Remove"}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {error && (
+        <p role="alert" style={{ margin: 0, color: "var(--color-danger)", fontSize: 14 }}>
+          {error}
+        </p>
+      )}
+
+      <div className="draft-actions" style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+        {open && blocked && (
+          <span id="payment-blocked" role="status" style={{ marginRight: "auto", alignSelf: "center", fontSize: 13, fontWeight: 600, color: "var(--color-amber)" }}>
+            {blocked}
+          </span>
+        )}
+        <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy === "record"}>
+          Close
+        </button>
+        {open && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => void record()}
+            disabled={!!busy || !!blocked}
+            aria-describedby={blocked ? "payment-blocked" : undefined}
+            style={{ padding: "10px 18px" }}
+          >
+            {busy === "record" ? "Recording…" : `Record ${valid ? `${fmtMoney(amount)} ` : ""}${METHOD_WORD[method]}`}
+          </button>
+        )}
+      </div>
+    </section>
   );
 }
 

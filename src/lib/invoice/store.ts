@@ -14,6 +14,8 @@ import { deriveInvoice, invoiceTotals, round2, type Invoice, type InvoiceDoc, ty
  * Invoice storage. Nothing is ever overwritten:
  *   invoices/<id>/doc-000001.json   one file per version (edits and voids add a version)
  *   invoices/<id>/pay-<pi>.json     one file per successful card payment
+ *   invoices/<id>/pay-off_<id>.json a check / cash / ACH / other payment recorded in the
+ *                                   dashboard (the only kind of payment that can be removed)
  *   invoices/<id>/pi-<pi>.json      PaymentIntents started for the invoice (for reuse / reconciliation)
  *   invoices/<id>/sub-<sub>.json    Stripe subscription started for the invoice's recurring lines
  *   invoice-numbers/<n>.json        claim for invoice number DH-<n> (unique by construction).
@@ -195,6 +197,14 @@ export async function recordPayment(invoiceId: string, payment: InvoicePayment):
   }
 }
 
+/** Remove a payment recorded by hand (a typo, the wrong invoice). Card payments are refunded in Stripe, never removed. */
+export async function deleteRecordedPayment(invoiceId: string, paymentId: string): Promise<void> {
+  if (!/^off_[A-Za-z0-9]+$/.test(paymentId)) throw new Error(`not a recorded payment: ${paymentId}`);
+  const p = `${INVOICES_PREFIX}${invoiceId}/pay-${paymentId}.json`;
+  await deleteObjects((await listObjects(`${INVOICES_PREFIX}${invoiceId}/pay-`)).filter((o) => o.pathname === p));
+  jsonCache.delete(p);
+}
+
 /** Idempotent: one record per Stripe subscription, however many paths report it. */
 export async function recordSubscription(invoiceId: string, sub: InvoiceSubscription): Promise<boolean> {
   const p = `${INVOICES_PREFIX}${invoiceId}/sub-${sub.subscriptionId}.json`;
@@ -221,7 +231,7 @@ export async function recordPaymentIntent(invoiceId: string, paymentIntentId: st
 
 /** Only an invoice nobody has paid can be deleted; its number is never reused. */
 export async function deleteInvoice(inv: Invoice): Promise<void> {
-  if (inv.payments.length) throw new Error("This invoice has payments — void it instead of deleting it.");
+  if (inv.payments.length) throw new Error("This invoice has payments — void it instead of deleting it (or remove the recorded payments first).");
   const objs = await listObjects(`${INVOICES_PREFIX}${inv.id}/`);
   await deleteObjects(objs);
   for (const o of objs) jsonCache.delete(o.pathname);

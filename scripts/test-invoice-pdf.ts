@@ -497,7 +497,7 @@ const CASES: Case[] = [
       has(r, "add our 2.5% surcharge");
       has(r, "Paid -$291.00");
       has(r, `Balance due ${"$"}844.56`);
-      assert.ok(r.pages.filter((p) => flat(p).includes("DATE METHOD CHARGED INCL. CARD FEE")).length >= 2, "payments header repeats");
+      assert.ok(r.pages.filter((p) => flat(p).includes("DATE METHOD AMOUNT INCL. CARD FEE")).length >= 2, "payments header repeats");
       assert.ok(r.links.includes(new URL(ODD_URL).href), "odd URL survives as a clickable link");
       assert.ok(r.flat.includes("…"), "an over-tall row is trimmed with an ellipsis");
     },

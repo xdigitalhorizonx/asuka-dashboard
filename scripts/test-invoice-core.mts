@@ -468,6 +468,135 @@ await check("card fee on every card (INVOICE_CARD_FEE_CARDS=all): debit/prepaid/
   }
 });
 
+const { validateRecordedPayment } = await import("../src/lib/invoice/validate");
+const offline = await import("../src/lib/invoice/offline");
+const { PayError, retrySubscriptions } = await import("../src/lib/invoice/payments");
+const { removeInvoiceTransaction } = await import("../src/lib/invoice/customers");
+const { paymentMethodLabel } = await import("../src/lib/invoice/pdf");
+const { readState } = await import("../src/lib/server-state");
+const payErr = (status: number, re: RegExp) => (e: unknown) => e instanceof PayError && e.status === status && re.test(e.message);
+const today = types.localYmd(new Date().toISOString());
+
+await check("recorded payments: labels, card vs by-hand, validation, received date", () => {
+  assert.equal(types.offlinePaymentLabel({ method: "check", reference: "1042" }), "Check #1042");
+  assert.equal(types.offlinePaymentLabel({ method: "check", reference: "#1042" }), "Check #1042");
+  assert.equal(types.offlinePaymentLabel({ method: "check", reference: "No. 77" }), "Check #77");
+  assert.equal(types.offlinePaymentLabel({ method: "check" }), "Check");
+  assert.equal(types.offlinePaymentLabel({ method: "cash", reference: "" }), "Cash");
+  assert.equal(types.offlinePaymentLabel({ method: "ach", reference: "88812" }), "ACH / bank transfer · 88812");
+  assert.equal(types.offlinePaymentLabel({ method: "other", reference: "Zelle" }), "Other · Zelle");
+  assert.equal(paymentMethodLabel({ method: "check", reference: "1042" }), "Check #1042", "the PDF uses the same label");
+  assert.equal(paymentMethodLabel({ brand: "visa", funding: "credit", last4: "4242" }), "Visa credit ••4242", "card payments unchanged");
+  assert.equal(types.isCardPayment({}), true, "payments from before this field are card payments");
+  assert.equal(types.isCardPayment({ method: "card" }), true);
+  assert.equal(types.isCardPayment({ method: "check" }), false);
+
+  const ok = validateRecordedPayment({ method: "check", amount: "$1,152.26", date: today, reference: " 1042 ", requestId: "abcDEF123456" }, today);
+  assert.deepEqual(ok, { method: "check", amount: 1152.26, date: today, reference: "1042", requestId: "abcDEF123456" });
+  assert.match(validateRecordedPayment({ method: "cash", amount: 5, date: today, requestId: "bad id!" }, today).requestId, /^[A-Za-z0-9]{16}$/, "a bad request id is replaced");
+  const ctl = String.fromCharCode(7);
+  assert.equal(validateRecordedPayment({ method: "other", amount: 5, date: today, reference: `Zel${ctl}le` }, today).reference, "Zel le", "control characters out");
+  const bad = (o: Record<string, unknown>, re: RegExp) =>
+    assert.throws(() => validateRecordedPayment({ method: "check", amount: 10, date: today, ...o }, today), (e: unknown) => e instanceof InvoiceInputError && re.test((e as Error).message));
+  bad({ method: "card" }, /check, cash, ACH or other/);
+  bad({ method: undefined }, /check, cash, ACH or other/);
+  bad({ amount: 0 }, /what was paid/);
+  bad({ amount: "abc" }, /between \$0/);
+  bad({ amount: -5 }, /between \$0/);
+  bad({ date: "2099-01-01" }, /future/);
+  bad({ date: "2026-02-31" }, /day it came in/);
+  bad({ date: "" }, /day it came in/);
+  bad({ reference: "x".repeat(61) }, /60 characters/);
+
+  // The stored instant always lands on the chosen calendar day in Carson City, summer or winter.
+  for (const d of ["2026-01-15", "2026-07-04", "2026-11-01"]) assert.equal(types.localYmd(offline.receivedAt(d, new Date("2026-12-31T20:00:00Z"))), d, d);
+  const now = new Date();
+  assert.equal(offline.receivedAt(today, now), now.toISOString(), "today: the actual time");
+});
+
+await check("recorded payments: a deposit check leaves the balance due, the rest marks it paid, overpay refused, double-submit once, remove reopens", async () => {
+  const inv = await store.createInvoice(validateInvoiceInput({ ...input, depositPercent: 50 }));
+  assert.deepEqual({ total: inv.total, dueNow: inv.dueNow }, { total: 2494.99, dueNow: 1294.99 });
+  const rec = (o: Record<string, unknown>) => validateRecordedPayment({ method: "check", date: today, ...o }, today);
+
+  let after = await offline.recordOfflinePayment(inv, rec({ amount: 1294.99, reference: "1042", requestId: "depositCheck0001" }));
+  assert.equal(after.status, "open");
+  assert.ok(after.deposit?.paidAt, "deposit counted as paid");
+  assert.deepEqual({ paid: after.paid, balance: after.balance, dueNow: after.dueNow }, { paid: 1294.99, balance: 1200, dueNow: 1200 });
+  const p = after.payments[0];
+  assert.deepEqual({ id: p.paymentIntentId, method: p.method, ref: p.reference, fee: p.fee, part: p.part }, { id: "off_depositCheck0001", method: "check", ref: "1042", fee: 0, part: "deposit" });
+  assert.equal(types.paymentPart(after), "balance", "the card page now asks for the balance");
+
+  const again = await offline.recordOfflinePayment(after, rec({ amount: 1294.99, reference: "1042", requestId: "depositCheck0001" }));
+  assert.equal(again.payments.length, 1, "the same submission twice records once");
+  const stale = await offline.recordOfflinePayment(inv, rec({ amount: 1294.99, requestId: "depositCheck0001" }));
+  assert.equal(stale.payments.length, 1, "even from a stale copy of the invoice");
+
+  await assert.rejects(offline.recordOfflinePayment(after, rec({ method: "cash", amount: 1200.01, requestId: "tooMuchCash0001" })), payErr(400, /more than the \$1,200\.00/));
+  after = await offline.recordOfflinePayment(after, rec({ method: "ach", amount: 1200, reference: "88812", requestId: "achBalance00001" }));
+  assert.equal(after.status, "paid");
+  assert.equal(after.balance, 0);
+  assert.ok(after.paidAt);
+  assert.equal(after.payments[1].part, "balance");
+  await assert.rejects(offline.recordOfflinePayment(after, rec({ amount: 1, requestId: "afterPaid000001" })), payErr(409, /already paid in full/));
+
+  const reopened = await offline.removeOfflinePayment(after, "off_achBalance00001");
+  assert.deepEqual({ status: reopened.status, balance: reopened.balance, n: reopened.payments.length }, { status: "open", balance: 1200, n: 1 });
+  await assert.rejects(offline.removeOfflinePayment(reopened, "off_achBalance00001"), payErr(404, /isn't on this invoice/));
+
+  // A plain invoice: a partial check leaves the rest due and carries no deposit/balance label.
+  const plain = await store.createInvoice(validateInvoiceInput({ ...input, client: { name: "Partial Payer" } }));
+  const part = await offline.recordOfflinePayment(plain, rec({ amount: 500, requestId: "partialCheck001" }));
+  assert.deepEqual({ status: part.status, balance: part.balance, dueNow: part.dueNow, label: part.payments[0].part }, { status: "open", balance: 1994.99, dueNow: 1994.99, label: undefined });
+
+  // Card payments are refunded in Stripe, never removed here; void invoices take no payments.
+  await store.recordPayment(plain.id, { paymentIntentId: "pi_card0001", amount: 10, fee: 0, paidAt: new Date().toISOString() });
+  const withCard = (await store.getInvoice(plain.id))!;
+  await assert.rejects(offline.removeOfflinePayment(withCard, "pi_card0001"), payErr(409, /refund it in Stripe/));
+  const voided = await store.saveVersion(withCard, { voided: true }, withCard.version);
+  await assert.rejects(offline.recordOfflinePayment(voided, rec({ amount: 1, requestId: "voidedInv000001" })), payErr(409, /void/));
+});
+
+await check("recorded payments: they land on the client's Customers tab and come off again", async () => {
+  const inv = await store.createInvoice(validateInvoiceInput({ ...input, client: { name: "Ledger Test Co", email: "ledger@example.com", phone: "", address: "" } }));
+  const after = await offline.recordOfflinePayment(inv, validateRecordedPayment({ method: "cash", amount: 250, date: today, reference: "front desk", requestId: "ledgerCash00001" }, today));
+  const cust = (await readState()).customers.find((c) => c.email === "ledger@example.com");
+  const tx = cust?.transactions.find((t) => t.id === "t_off_ledgerCash00001");
+  assert.ok(tx, "added under the client");
+  assert.deepEqual({ amount: tx.amount, method: tx.method, date: tx.date, stripeId: tx.stripeId }, { amount: 250, method: "cash", date: today, stripeId: undefined });
+  assert.match(tx.memo, /^Invoice DH-\d+ · Cash · front desk$/);
+
+  const pay = after.payments[0];
+  const list = [{ ...cust!, transactions: [{ id: "t_manual", amount: 99, method: "check" as const, date: today, memo: "typed in by hand", createdAt: "" }] }];
+  assert.equal(addInvoiceTransaction(list, after, pay), true, "a hand-typed transaction (no Stripe id) isn't mistaken for it");
+  assert.equal(addInvoiceTransaction(list, after, pay), false, "never twice");
+  assert.equal(removeInvoiceTransaction(list, pay), true);
+  assert.deepEqual(list[0].transactions.map((t) => t.id), ["t_manual"], "only that payment comes off");
+  assert.equal(removeInvoiceTransaction(list, pay), false);
+  assert.equal(addInvoiceTransaction(list, after, { paymentIntentId: "pi_x", amount: 5, fee: 0, paidAt: new Date().toISOString() }), false, "a card payment still needs its charge id");
+
+  await offline.removeOfflinePayment(after, pay.paymentIntentId);
+  const gone = (await readState()).customers.find((c) => c.email === "ledger@example.com");
+  assert.equal(gone?.transactions.some((t) => t.id === "t_off_ledgerCash00001"), false, "removed from the Customers tab");
+});
+
+await check("recorded payments: monthly lines paid by check save no card, and the billing retry says so", async () => {
+  const inv = await store.createInvoice(validateInvoiceInput({ ...input, client: { name: "Monthly By Check" } }));
+  const paid = await offline.recordOfflinePayment(inv, validateRecordedPayment({ method: "check", amount: inv.total, date: today, requestId: "monthlyCheck001" }, today));
+  assert.equal(paid.status, "paid");
+  assert.equal(savesCard(paid), false, "no later card payment saves a card");
+  assert.equal(types.subscriptionsDue(paid), true);
+  assert.equal(missingSubscriptions(paid).length, 1);
+  const keep = process.env.STRIPE_SECRET_KEY;
+  process.env.STRIPE_SECRET_KEY = "sk_test_offline_check";
+  try {
+    await assert.rejects(retrySubscriptions(paid), payErr(409, /no card to bill the monthly/));
+  } finally {
+    if (keep) process.env.STRIPE_SECRET_KEY = keep;
+    else delete process.env.STRIPE_SECRET_KEY;
+  }
+});
+
 await check("payments status: key presence + live/test mismatch detection", () => {
   const keep = { sk: process.env.STRIPE_SECRET_KEY, pk: process.env.STRIPE_PUBLISHABLE_KEY };
   process.env.STRIPE_SECRET_KEY = "sk_test_x";

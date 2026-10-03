@@ -32,6 +32,8 @@ import {
   fmtLongDate,
   fmtMoney,
   invoiceTotals,
+  isCardPayment,
+  offlinePaymentLabel,
   recurringGroups,
   round2,
   savesCard,
@@ -490,8 +492,9 @@ function titleCase(s: string): string {
     .join(" ");
 }
 
-/** "Visa credit ••4242", "Debit card ••0005", "Card". */
-export function paymentMethodLabel(p: Pick<InvoicePayment, "brand" | "funding" | "last4">): string {
+/** "Visa credit ••4242", "Debit card ••0005", "Card" — or "Check #1042", "Cash"… for a payment recorded by hand. */
+export function paymentMethodLabel(p: Pick<InvoicePayment, "brand" | "funding" | "last4" | "method" | "reference">): string {
+  if (!isCardPayment(p)) return offlinePaymentLabel(p);
   const key = (p.brand ?? "").trim().toLowerCase();
   const brand = key && key !== "unknown" ? (BRAND_NAMES[key] ?? titleCase(key)) : "";
   const fundingKey = (p.funding ?? "").trim().toLowerCase();
@@ -1040,7 +1043,7 @@ class InvoiceLayout {
       this.tableHead([
         { text: "DATE", x: dateX, align: "left" },
         { text: "METHOD", x: methodX, align: "left" },
-        { text: "CHARGED", x: chargedR, align: "right" },
+        { text: "AMOUNT", x: chargedR, align: "right" },
         { text: "INCL. CARD FEE", x: AMT_R, align: "right" },
       ]);
     this.label("PAYMENTS", MX, this.y);

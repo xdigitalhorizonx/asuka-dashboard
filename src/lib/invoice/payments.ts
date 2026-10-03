@@ -8,6 +8,7 @@ import {
   feeAppliesTo,
   firstChargeAt,
   fmtLongDate,
+  isCardPayment,
   MIN_CHARGE,
   paymentPart,
   recurringGroups,
@@ -371,8 +372,14 @@ export async function ensureSubscriptions(inv: Invoice, pi: Stripe.PaymentIntent
 export async function retrySubscriptions(inv: Invoice): Promise<Invoice> {
   if (!subscriptionsDue(inv) || !missingSubscriptions(inv).length || !stripeSecretKey()) return inv;
   // The payment that saved the card (a deposit invoice's balance payment doesn't).
-  const saved = inv.payments.filter((p) => p.customerId).pop() ?? inv.payments[inv.payments.length - 1];
-  if (!saved) return inv;
+  const cards = inv.payments.filter(isCardPayment);
+  const saved = cards.filter((p) => p.customerId).pop() ?? cards[cards.length - 1];
+  if (!saved) {
+    throw new PayError(
+      "This invoice was paid by check, cash or ACH, so there's no card to bill the monthly to — send a separate card invoice for it, or set the subscription up in Stripe.",
+      409
+    );
+  }
   const pi = await stripe().paymentIntents.retrieve(saved.paymentIntentId, { expand: ["latest_charge"] });
   await ensureSubscriptions(inv, pi, saved.paidAt);
   return refreshed(inv.id);
