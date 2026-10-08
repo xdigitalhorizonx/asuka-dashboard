@@ -687,10 +687,10 @@ main.content {
   .total {
     font-size: 28px;
   }
-  /* labeled navigation tiles in a compact grid */
+  /* labeled navigation tiles in a compact grid: nine sections = three even rows */
   .dock {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     overflow: visible;
   }
   .dock-item {
@@ -704,10 +704,14 @@ main.content {
     line-height: 1.1;
   }
 }
-@media (max-width: 359px) {
-  .dock {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
+
+/* DH Tools: the live pipeline step breathes while the engine works on it */
+.dh-pulse {
+  animation: dh-pulse 1.4s var(--ease) infinite;
+}
+@keyframes dh-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-blue) 45%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--color-blue) 0%, transparent); }
 }
 
 /* ───────────────────────── State colors ───────────────────────── */

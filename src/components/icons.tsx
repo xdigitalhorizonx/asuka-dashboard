@@ -1,7 +1,7 @@
 import type { CSSProperties, JSX, ReactNode } from "react";
 
 /**
- * Glass icon set — eight original glyphs drawn on a 24×24 grid.
+ * Glass icon set — nine original glyphs drawn on a 24×24 grid.
  *
  * Style rules (shared by every glyph):
  *  - rounded 1.6px outlines in the section ink (`--color-primary`; each dock
@@ -20,7 +20,8 @@ export type IconName =
   | "files"
   | "crm"
   | "customers"
-  | "invoices";
+  | "invoices"
+  | "tools";
 
 export const ICON_NAMES: IconName[] = [
   "overview",
@@ -31,6 +32,7 @@ export const ICON_NAMES: IconName[] = [
   "crm",
   "customers",
   "invoices",
+  "tools",
 ];
 
 const PRIMARY = "var(--color-primary)";
@@ -133,6 +135,17 @@ const GLYPHS: Record<IconName, ReactNode> = {
       />
       <path d="M14.1 8.4c-.35-.75-1.1-1.2-2.1-1.2-1.25 0-2.2.65-2.2 1.65 0 2.35 4.4 1.3 4.4 3.8 0 1.05-.95 1.8-2.2 1.8-1.05 0-1.9-.5-2.3-1.3" />
       <path d="M12 5.8v1.4M12 14.45v1.3" />
+    </>
+  ),
+
+  // Toolbox: a filled case with a carry handle on top, a lid seam across it and
+  // a small latch on the seam.
+  tools: (
+    <>
+      <path d="M9 8.5V6.5A1.5 1.5 0 0 1 10.5 5h3A1.5 1.5 0 0 1 15 6.5v2" />
+      <rect x="3" y="8.5" width="18" height="11.5" rx="2.5" fill={PRIMARY} fillOpacity={GLASS} />
+      <path d="M3 13h7.5M13.5 13H21" stroke={LIGHT} />
+      <rect x="10.5" y="11.5" width="3" height="3" rx="0.8" />
     </>
   ),
 };

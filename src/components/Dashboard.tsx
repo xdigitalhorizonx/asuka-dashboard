@@ -10,8 +10,9 @@ import { Icon } from "./icons";
 import { Crm } from "./Crm";
 import { Customers, money } from "./Customers";
 import { Invoices } from "./Invoices";
+import { DhTools } from "./DhTools";
 
-type Tab = "overview" | "reminders" | "calendar" | "notes" | "files" | "crm" | "invoices" | "customers";
+type Tab = "overview" | "reminders" | "calendar" | "notes" | "files" | "crm" | "invoices" | "customers" | "tools";
 type Store = ReturnType<typeof useAsukaStore>;
 
 /** Every section owns a pastel hue: the dock glyph, its active state and the matching overview tile use it. */
@@ -24,6 +25,7 @@ const NAV: { id: Tab; label: string; hue: string }[] = [
   { id: "crm", label: "CRM", hue: "var(--color-lavender)" },
   { id: "invoices", label: "Invoices", hue: "var(--color-teal)" },
   { id: "customers", label: "Customers", hue: "var(--color-mint)" },
+  { id: "tools", label: "DH Tools", hue: "var(--color-blue)" },
 ];
 
 function subscribeHash(cb: () => void) {
@@ -210,9 +212,13 @@ export default function Dashboard({ lockable = false }: { lockable?: boolean }) 
                 <Customers store={store} />
               ) : tab === "invoices" ? (
                 <Invoices />
-              ) : (
+              ) : tab === "tools" ? null : (
                 <Crm store={store} />
               )}
+              {/* Always mounted, only hidden: a running engine keeps streaming while another section is open. */}
+              <div hidden={tab !== "tools"}>
+                <DhTools />
+              </div>
             </>
           )}
         </main>
