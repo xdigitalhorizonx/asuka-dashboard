@@ -99,6 +99,8 @@ export interface LeadNote {
   id: string;
   body: string;
   createdAt: string;
+  /** Set when the note was changed after it was logged. */
+  editedAt?: string;
 }
 
 export interface Lead {

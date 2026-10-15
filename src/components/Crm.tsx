@@ -402,6 +402,7 @@ function LeadDetail({
   onDelete: () => void;
 }) {
   const [noteDraft, setNoteDraft] = useState("");
+  const [noteEdit, setNoteEdit] = useState<{ id: string; body: string } | null>(null);
   const [editingBg, setEditingBg] = useState(false);
   const [bgDraft, setBgDraft] = useState(lead.notes);
   const [showAllBg, setShowAllBg] = useState(false);
@@ -425,6 +426,26 @@ function LeadDetail({
   }
   function removeNote(id: string) {
     onPatch((l) => ({ noteLog: l.noteLog.filter((n) => n.id !== id) }));
+    if (noteEdit?.id === id) setNoteEdit(null);
+  }
+  function saveNoteEdit() {
+    if (!noteEdit) return;
+    const body = noteEdit.body.trim();
+    if (!body) return;
+    const { id } = noteEdit;
+    const editedAt = new Date().toISOString();
+    onPatch((l) => ({ noteLog: l.noteLog.map((n) => (n.id === id && n.body !== body ? { ...n, body, editedAt } : n)) }));
+    setNoteEdit(null);
+    haptic("save");
+  }
+  function onNoteEditKey(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      saveNoteEdit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setNoteEdit(null);
+    }
   }
   function saveBg() {
     onPatch(() => ({ notes: bgDraft }));
@@ -511,26 +532,65 @@ function LeadDetail({
         </button>
         <div style={{ marginTop: 12, display: "grid", gap: 8, maxHeight: 320, overflowY: "auto" }}>
           {lead.noteLog.length === 0 && <p style={{ fontSize: 13, color: "var(--color-muted)", margin: 0 }}>No notes yet — log your first touch.</p>}
-          {lead.noteLog.map((n) => (
-            <article key={n.id} style={{ padding: 10, borderRadius: 12, border: "1px solid var(--color-border)", background: "var(--color-bg)", minWidth: 0 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                <span className="label" style={{ ...ellipsis, textTransform: "none" }} title={new Date(n.createdAt).toLocaleString()}>
-                  {fmtStamp(n.createdAt)} · {ago(n.createdAt)}
-                </span>
-                <button
-                  type="button"
-                  className="btn btn-danger btn-ghost"
-                  onClick={() => removeNote(n.id)}
-                  aria-label="Delete note"
-                  title="Delete note"
-                  style={{ minHeight: 26, padding: "2px 8px", fontSize: 14, lineHeight: 1 }}
-                >
-                  ×
-                </button>
-              </div>
-              <p style={{ margin: 0, whiteSpace: "pre-wrap", lineHeight: 1.5, overflowWrap: "anywhere" }}>{n.body}</p>
-            </article>
-          ))}
+          {lead.noteLog.map((n) => {
+            const editing = noteEdit?.id === n.id;
+            return (
+              <article key={n.id} style={{ padding: 10, borderRadius: 12, border: `1px solid ${editing ? "var(--color-selected-edge)" : "var(--color-border)"}`, background: "var(--color-bg)", minWidth: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                  <span
+                    className="label"
+                    style={{ ...ellipsis, textTransform: "none" }}
+                    title={`${new Date(n.createdAt).toLocaleString()}${n.editedAt ? ` · edited ${new Date(n.editedAt).toLocaleString()}` : ""}`}
+                  >
+                    {fmtStamp(n.createdAt)} · {ago(n.createdAt)}{n.editedAt ? " · edited" : ""}
+                  </span>
+                  {!editing && (
+                    <span style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => setNoteEdit({ id: n.id, body: n.body })}
+                        aria-label="Edit note"
+                        title="Edit note"
+                        style={{ minHeight: 26, padding: "2px 8px", fontSize: 12, lineHeight: 1 }}
+                      >
+                        EDIT
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-ghost"
+                        onClick={() => removeNote(n.id)}
+                        aria-label="Delete note"
+                        title="Delete note"
+                        style={{ minHeight: 26, padding: "2px 8px", fontSize: 14, lineHeight: 1 }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  )}
+                </div>
+                {editing ? (
+                  <>
+                    <textarea
+                      className="input"
+                      value={noteEdit.body}
+                      onChange={(e) => setNoteEdit({ id: n.id, body: e.target.value })}
+                      onKeyDown={onNoteEditKey}
+                      aria-label="Edit note"
+                      autoFocus
+                      style={{ height: 96, resize: "vertical" }}
+                    />
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 4, marginTop: 6 }}>
+                      <button type="button" className="btn" style={compactBtn} onClick={() => setNoteEdit(null)}>CANCEL</button>
+                      <button type="button" className="btn btn-primary" style={compactBtn} onClick={saveNoteEdit} disabled={!noteEdit.body.trim()} title={noteEdit.body.trim() ? undefined : "A note can't be empty — use × to delete it"}>SAVE</button>
+                    </div>
+                  </>
+                ) : (
+                  <p style={{ margin: 0, whiteSpace: "pre-wrap", lineHeight: 1.5, overflowWrap: "anywhere" }}>{n.body}</p>
+                )}
+              </article>
+            );
+          })}
         </div>
       </div>
 

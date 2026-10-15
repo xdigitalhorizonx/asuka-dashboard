@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { CalendarEvent, Lead, Reminder, ReminderPriority } from "@/lib/types";
 import { uid, useAsukaStore, useCalendarEvents } from "@/lib/store";
 import { apptTime, hasAppointment, localToday, tint } from "@/lib/crm";
@@ -643,8 +643,28 @@ function Notes({ store }: { store: Store }) {
   const [sel, setSel] = useState<string | null>(store.notes[0]?.id ?? null);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [edit, setEdit] = useState<{ id: string; title: string; body: string } | null>(null);
   const filtered = store.notes.filter((n) => `${n.title} ${n.body}`.toLowerCase().includes(q.toLowerCase()));
   const active = store.notes.find((n) => n.id === sel) || null;
+  const editing = !!active && edit?.id === active.id;
+  const canSaveEdit = !!edit && (!!edit.title.trim() || !!edit.body.trim());
+
+  function saveEdit() {
+    if (!edit || !canSaveEdit) return;
+    const { id, title: t, body: b } = edit;
+    store.setNotes((ns) => ns.map((x) => (x.id === id ? { ...x, title: t.trim() || "Untitled", body: b, updatedAt: new Date().toISOString() } : x)));
+    setEdit(null);
+    haptic("save");
+  }
+  function onEditKey(e: ReactKeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      saveEdit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setEdit(null);
+    }
+  }
 
   return (
     <div className="split split-left" style={{ ["--split-w" as string]: "320px" }}>
@@ -668,7 +688,7 @@ function Notes({ store }: { store: Store }) {
         </div>
         <div style={{ overflow: "auto", flex: 1 }}>
           {filtered.sort((a, b) => Number(b.pinned) - Number(a.pinned)).map((n) => (
-            <button key={n.id} type="button" onClick={() => setSel(n.id)} aria-pressed={n.id === sel} style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 10px", borderRadius: 12, border: n.id === sel ? "1px solid var(--color-selected-edge)" : "1px solid transparent", background: n.id === sel ? "var(--color-selected)" : "transparent", color: "inherit", cursor: "pointer", minWidth: 0, transition: "background-color 200ms, border-color 200ms" }}>
+            <button key={n.id} type="button" onClick={() => { setSel(n.id); if (edit?.id !== n.id) setEdit(null); }} aria-pressed={n.id === sel} style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 10px", borderRadius: 12, border: n.id === sel ? "1px solid var(--color-selected-edge)" : "1px solid transparent", background: n.id === sel ? "var(--color-selected)" : "transparent", color: "inherit", cursor: "pointer", minWidth: 0, transition: "background-color 200ms, border-color 200ms" }}>
               <div style={{ fontSize: 13, fontWeight: 500 }}>{n.pinned ? "★ " : ""}{n.title}</div>
               <div style={{ fontSize: 13, color: "var(--color-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.body}</div>
             </button>
@@ -676,11 +696,24 @@ function Notes({ store }: { store: Store }) {
         </div>
       </div>
       <div className="card" style={{ padding: 22 }}>
-        {!active ? <p style={{ color: "var(--color-muted)" }}>Select a note.</p> : (
+        {!active ? <p style={{ color: "var(--color-muted)" }}>Select a note.</p> : editing && edit ? (
+          <div style={{ display: "grid", gap: 10 }} onKeyDown={onEditKey}>
+            <input value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} placeholder="Title" className="input" aria-label="Note title" />
+            <textarea value={edit.body} onChange={(e) => setEdit({ ...edit, body: e.target.value })} placeholder="Body" className="input" aria-label="Note body" autoFocus style={{ height: 260, resize: "vertical" }} />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 13, color: "var(--color-muted)" }}>Ctrl+Enter to save · Esc to cancel</span>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button type="button" className="btn" style={{ padding: "6px 10px" }} onClick={() => setEdit(null)}>CANCEL</button>
+                <button type="button" className="btn btn-primary" style={{ padding: "6px 10px" }} onClick={saveEdit} disabled={!canSaveEdit} title={canSaveEdit ? undefined : "Add a title or body to save"}>SAVE</button>
+              </div>
+            </div>
+          </div>
+        ) : (
           <>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
               <h2 className="card-title" style={{ margin: 0, minWidth: 0, overflowWrap: "anywhere" }}>{active.title}</h2>
               <div style={{ display: "flex", gap: 6 }}>
+                <button type="button" className="btn" style={{ padding: "6px 10px" }} onClick={() => setEdit({ id: active.id, title: active.title, body: active.body })}>EDIT</button>
                 <button className="btn" style={{ padding: "6px 10px" }} onClick={() => store.setNotes((ns) => ns.map((x) => (x.id === active.id ? { ...x, pinned: !x.pinned, updatedAt: new Date().toISOString() } : x)))}>{active.pinned ? "UNPIN" : "PIN"}</button>
                 <button type="button" className="btn btn-danger" onClick={() => { store.setNotes((ns) => ns.filter((x) => x.id !== active.id)); setSel(null); }}>Delete</button>
               </div>
