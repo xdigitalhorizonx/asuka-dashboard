@@ -534,6 +534,12 @@ main.content {
     display: none !important;
   }
 }
+/* tablets only: rows still show every column there, so the name cell has no room to spare */
+@media (min-width: 640px) and (max-width: 1023px) {
+  .hide-tablet {
+    display: none !important;
+  }
+}
 /* phones only: the invoice row's own action bar, and inline text shown only there */
 .only-sm {
   display: none;

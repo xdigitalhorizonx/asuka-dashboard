@@ -3,7 +3,21 @@
 import { useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent } from "react";
 import { CRM_STAGES, type CrmStage, type Lead, type LeadNote } from "@/lib/types";
 import { uid, useAsukaStore } from "@/lib/store";
-import { ago, fmtAppt, fmtStamp, stageColor, stageLabel, tint } from "@/lib/crm";
+import {
+  CALL_TIERS,
+  ago,
+  callPriority,
+  callTierColor,
+  callTierRank,
+  fmtAppt,
+  fmtDay,
+  fmtStamp,
+  stageColor,
+  stageLabel,
+  tint,
+  type CallPriority,
+  type CallTier,
+} from "@/lib/crm";
 import { haptic } from "@/lib/haptics";
 
 type Store = ReturnType<typeof useAsukaStore>;
@@ -98,6 +112,21 @@ function lastTouch(l: Lead): string {
   return `${ago(last.createdAt)} · ${n} note${n === 1 ? "" : "s"}`;
 }
 
+/** Call-priority tag: the word carries the meaning, the colour makes it scannable. */
+function TierPill({ tier, short, className }: { tier: CallTier; short?: boolean; className?: string }) {
+  const t = CALL_TIERS.find((x) => x.id === tier)!;
+  const c = callTierColor(tier);
+  return (
+    <span
+      className={`label${className ? ` ${className}` : ""}`}
+      title={`${t.label}: ${t.hint}`}
+      style={{ flexShrink: 0, padding: "2px 7px", borderRadius: 999, fontSize: 11, lineHeight: 1.3, color: c, background: tint(c, 12), border: `1px solid ${tint(c, 35)}` }}
+    >
+      {short ? t.short : t.label}
+    </span>
+  );
+}
+
 function Chevron({ open }: { open: boolean }) {
   return (
     <svg
@@ -126,8 +155,12 @@ export function Crm({ store }: { store: Store }) {
   const active = store.leads.find((l) => l.id === sel) || null;
   const now = useNow();
 
+  /** Who-to-call tier per lead, null for leads outside the researched New Lead pool. */
+  const [tierFilter, setTierFilter] = useState<CallTier | "all">("all");
+  const prio = new Map<string, CallPriority | null>(store.leads.map((l) => [l.id, callPriority(l)]));
+
   const needle = q.trim().toLowerCase();
-  const visible = needle
+  const matches = needle
     ? store.leads.filter((l) =>
         [l.name, l.company, l.email, l.phone, l.notes, ...l.noteLog.map((n) => n.body)]
           .join(" ")
@@ -135,6 +168,12 @@ export function Crm({ store }: { store: Store }) {
           .includes(needle)
       )
     : store.leads;
+  const tierCounts: Record<CallTier, number> = { first: 0, next: 0, later: 0, email: 0 };
+  for (const l of matches) {
+    const p = prio.get(l.id);
+    if (p) tierCounts[p.tier]++;
+  }
+  const visible = tierFilter === "all" ? matches : matches.filter((l) => prio.get(l.id)?.tier === tierFilter);
 
   function toggleGroup(key: string) {
     setOpenGroups((prev) => {
@@ -223,6 +262,35 @@ export function Crm({ store }: { store: Store }) {
             />
             <span className="label" style={{ whiteSpace: "nowrap" }}>{visible.length}/{store.leads.length}</span>
           </div>
+          <div role="group" aria-label="Filter by who to call" style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "10px 14px", borderBottom: "1px solid var(--color-border)" }}>
+            <button
+              type="button"
+              className={`btn${tierFilter === "all" ? " btn-primary" : ""}`}
+              aria-pressed={tierFilter === "all"}
+              onClick={() => setTierFilter("all")}
+              style={{ minHeight: 30, padding: "4px 10px" }}
+            >
+              ALL <span style={{ opacity: 0.7 }}>{matches.length}</span>
+            </button>
+            {CALL_TIERS.map((t) => {
+              const c = callTierColor(t.id);
+              const on = tierFilter === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  className="btn"
+                  aria-pressed={on}
+                  title={t.hint}
+                  onClick={() => setTierFilter(on ? "all" : t.id)}
+                  style={{ minHeight: 30, padding: "4px 10px", color: c, borderColor: on ? c : tint(c, 35), background: on ? tint(c, 14) : undefined }}
+                >
+                  <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: "50%", background: c }} />
+                  {t.label} <span style={{ opacity: 0.75 }}>{tierCounts[t.id]}</span>
+                </button>
+              );
+            })}
+          </div>
           <div className="rows label" style={{ ...ROW_VARS, padding: "10px 14px 10px 17px", borderBottom: "1px solid var(--color-border)" }}>
             <span />
             <span>NAME</span>
@@ -232,26 +300,38 @@ export function Crm({ store }: { store: Store }) {
             <span>VALUE</span>
           </div>
           {store.leads.length === 0 && <p style={{ padding: 16, margin: 0, color: "var(--color-muted)" }}>No leads. Text Asuka: Lead: Name, Company, email, phone</p>}
-          {store.leads.length > 0 && visible.length === 0 && <p style={{ padding: 16, margin: 0, color: "var(--color-muted)" }}>No leads match “{q}”.</p>}
+          {store.leads.length > 0 && visible.length === 0 && (
+            <p style={{ padding: 16, margin: 0, color: "var(--color-muted)" }}>
+              {tierFilter !== "all" && matches.length > 0
+                ? `No ${CALL_TIERS.find((t) => t.id === tierFilter)?.label.toLowerCase()} leads${needle ? ` match “${q}”` : ""}.`
+                : `No leads match “${q}”.`}
+            </p>
+          )}
           <div role="listbox" aria-label="Leads" style={{ maxHeight: 560, overflowY: "auto" }}>
-            {visible.map((l) => (
-              <button
-                key={l.id}
-                type="button"
-                role="option"
-                className="row-btn rows"
-                aria-selected={l.id === sel}
-                onClick={() => select(l)}
-                style={ROW_VARS}
-              >
-                <span style={{ ...avatar(l.stage), width: 28, height: 28, fontSize: 11 }}>{initials(l.name)}</span>
-                <span style={ellipsis}>{l.name}</span>
-                <span className="hide-sm" style={{ ...ellipsis, color: "var(--color-muted)" }}>{l.company || "—"}</span>
-                <span className="hide-sm label" style={{ ...ellipsis, color: stageColor(l.stage) }}>{stageLabel(l.stage)}</span>
-                <span className="hide-sm" style={{ ...ellipsis, fontSize: 13, color: l.stage === "appointment_set" && l.appointmentAt ? "var(--color-violet)" : "var(--color-muted)" }}>{lastTouch(l)}</span>
-                <span style={{ ...ellipsis, color: l.value ? "var(--color-amber)" : "var(--color-muted)" }}>{l.value ? `$${l.value.toLocaleString()}` : "—"}</span>
-              </button>
-            ))}
+            {visible.map((l) => {
+              const p = prio.get(l.id);
+              return (
+                <button
+                  key={l.id}
+                  type="button"
+                  role="option"
+                  className="row-btn rows"
+                  aria-selected={l.id === sel}
+                  onClick={() => select(l)}
+                  style={{ ...ROW_VARS, ...(p && l.id !== sel ? { borderLeftColor: callTierColor(p.tier) } : {}) }}
+                >
+                  <span style={{ ...avatar(l.stage), width: 28, height: 28, fontSize: 11 }}>{initials(l.name)}</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                    {p && <TierPill tier={p.tier} short className="hide-tablet" />}
+                    <span style={ellipsis}>{l.name}</span>
+                  </span>
+                  <span className="hide-sm" style={{ ...ellipsis, color: "var(--color-muted)" }}>{l.company || "—"}</span>
+                  <span className="hide-sm label" style={{ ...ellipsis, color: stageColor(l.stage) }}>{stageLabel(l.stage)}</span>
+                  <span className="hide-sm" style={{ ...ellipsis, fontSize: 13, color: l.stage === "appointment_set" && l.appointmentAt ? "var(--color-violet)" : "var(--color-muted)" }}>{lastTouch(l)}</span>
+                  <span style={{ ...ellipsis, color: l.value ? "var(--color-amber)" : "var(--color-muted)" }}>{l.value ? `$${l.value.toLocaleString()}` : "—"}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -262,6 +342,7 @@ export function Crm({ store }: { store: Store }) {
             <LeadDetail
               key={active.id}
               lead={active}
+              priority={prio.get(active.id) ?? null}
               onPatch={(fn) => patch(active.id, fn)}
               onStage={(stage) => move(active.id, stage)}
               onDelete={() => remove(active.id)}
@@ -276,6 +357,9 @@ export function Crm({ store }: { store: Store }) {
           if (col.id === "appointment_set") {
             cards.sort((a, b) => (a.appointmentAt || "9999").localeCompare(b.appointmentAt || "9999"));
           }
+          if (col.id === "new_lead") {
+            cards.sort((a, b) => callTierRank(prio.get(a.id)?.tier) - callTierRank(prio.get(b.id)?.tier));
+          }
           const buckets: Record<AgeGroup, Lead[]> = { 0: [], 3: [], 7: [], 14: [] };
           for (const l of cards) buckets[ageGroup(l.createdAt, now)].push(l);
           const fresh = buckets[0];
@@ -284,6 +368,7 @@ export function Crm({ store }: { store: Store }) {
           const card = (l: Lead) => {
             const last = l.noteLog[0];
             const on = l.id === sel;
+            const p = prio.get(l.id);
             return (
               <article
                 key={l.id}
@@ -297,12 +382,19 @@ export function Crm({ store }: { store: Store }) {
                   minWidth: 0,
                   border: `1px solid ${on ? "var(--color-selected-edge)" : "var(--color-border)"}`,
                   background: on ? "var(--color-selected)" : "var(--color-surface)",
+                  boxShadow: p ? `inset 3px 0 0 0 ${callTierColor(p.tier)}` : undefined,
                   cursor: "grab",
                   transition: "background-color 200ms, border-color 200ms",
                 }}
               >
                 <div style={ellipsis}>{l.name}</div>
                 <div style={{ ...ellipsis, fontSize: 13, color: "var(--color-muted)" }}>{l.company || "—"}</div>
+                {p && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, minWidth: 0 }}>
+                    <TierPill tier={p.tier} short />
+                    <span style={{ ...ellipsis, fontSize: 13, color: "var(--color-muted)" }}>{p.headline}</span>
+                  </div>
+                )}
                 {col.id === "appointment_set" && (
                   <div className="label" style={{ marginTop: 6, color: l.appointmentAt ? "var(--color-violet)" : "var(--color-amber)" }}>
                     {l.appointmentAt ? fmtAppt(l.appointmentAt) : "NO DATE SET"}
@@ -347,6 +439,7 @@ export function Crm({ store }: { store: Store }) {
                 {groups.map((g) => {
                   const key = groupKey(col.id, g.key);
                   const open = openGroups.has(key);
+                  const callFirst = buckets[g.key].filter((l) => prio.get(l.id)?.tier === "first").length;
                   return (
                     <div key={key}>
                       <button
@@ -373,6 +466,11 @@ export function Crm({ store }: { store: Store }) {
                       >
                         <span style={ellipsis}>{g.label}</span>
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                          {callFirst > 0 && (
+                            <span title={`${callFirst} to call first`} style={{ color: callTierColor("first"), whiteSpace: "nowrap" }}>
+                              {callFirst} 1ST ·
+                            </span>
+                          )}
                           <span>{buckets[g.key].length}</span>
                           <Chevron open={open} />
                         </span>
@@ -392,11 +490,13 @@ export function Crm({ store }: { store: Store }) {
 
 function LeadDetail({
   lead,
+  priority,
   onPatch,
   onStage,
   onDelete,
 }: {
   lead: Lead;
+  priority: CallPriority | null;
   onPatch: (fn: (l: Lead) => Partial<Lead>) => void;
   onStage: (stage: CrmStage) => void;
   onDelete: () => void;
@@ -471,6 +571,24 @@ function LeadDetail({
         <span>·</span>
         {lead.phone ? <a href={`tel:${lead.phone.replace(/[^\d+]/g, "")}`} style={{ color: "var(--color-accent)", textDecoration: "none", overflowWrap: "anywhere" }}>{lead.phone}</a> : <span>no phone</span>}
       </p>
+
+      {priority && (
+        <div style={{ marginTop: 14, padding: 12, borderRadius: 12, border: `1px solid ${tint(callTierColor(priority.tier), 40)}`, background: tint(callTierColor(priority.tier), 8), minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <span className="label" style={{ color: callTierColor(priority.tier) }}>WHO TO CALL</span>
+            <TierPill tier={priority.tier} />
+          </div>
+          <div style={{ fontWeight: 600 }}>{priority.headline}</div>
+          {priority.detail && <div style={{ marginTop: 4, fontSize: 13, color: "var(--color-muted)", overflowWrap: "anywhere" }}>{priority.detail}</div>}
+          {(priority.checkedOn || priority.emailedOn) && (
+            <div style={{ marginTop: 6, fontSize: 13, color: "var(--color-muted)" }}>
+              {[priority.checkedOn && `Site checked ${fmtDay(priority.checkedOn)}`, priority.emailedOn && `intro email sent ${fmtDay(priority.emailedOn)}`]
+                .filter(Boolean)
+                .join(" · ")}
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ marginTop: 14, display: "flex", flexWrap: "wrap", gap: 6 }}>
         {CRM_STAGES.map((s) => {
