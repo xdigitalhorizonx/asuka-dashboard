@@ -2,6 +2,8 @@
 
 import { useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent } from "react";
 import { CRM_STAGES, type CrmStage, type Lead, type LeadNote } from "@/lib/types";
+import { editorHtml, noteHtml, type RichValue } from "@/lib/rich-text";
+import { RichText, RichTextEditor } from "./RichNote";
 import { uid, useAsukaStore } from "@/lib/store";
 import {
   CALL_TIERS,
@@ -501,8 +503,10 @@ function LeadDetail({
   onStage: (stage: CrmStage) => void;
   onDelete: () => void;
 }) {
-  const [noteDraft, setNoteDraft] = useState("");
-  const [noteEdit, setNoteEdit] = useState<{ id: string; body: string } | null>(null);
+  const [noteDraft, setNoteDraft] = useState<RichValue>({ text: "" });
+  /** Bumped after a note is added to remount (clear) the editor. */
+  const [draftKey, setDraftKey] = useState(0);
+  const [noteEdit, setNoteEdit] = useState<{ id: string; body: RichValue } | null>(null);
   const [editingBg, setEditingBg] = useState(false);
   const [bgDraft, setBgDraft] = useState(lead.notes);
   const [showAllBg, setShowAllBg] = useState(false);
@@ -511,14 +515,15 @@ function LeadDetail({
   const bgShown = bgLong && !showAllBg ? lead.notes.split("\n").slice(0, 4).join("\n") : lead.notes;
 
   function addNote() {
-    const body = noteDraft.trim();
+    const body = noteDraft.text.trim();
     if (!body) return;
-    const note: LeadNote = { id: uid("ln"), body, createdAt: new Date().toISOString() };
+    const note: LeadNote = { id: uid("ln"), body, ...(noteDraft.html ? { html: noteDraft.html } : {}), createdAt: new Date().toISOString() };
     onPatch((l) => ({ noteLog: [note, ...l.noteLog] }));
-    setNoteDraft("");
+    setNoteDraft({ text: "" });
+    setDraftKey((k) => k + 1);
     haptic("save");
   }
-  function onNoteKey(e: KeyboardEvent<HTMLTextAreaElement>) {
+  function onNoteKey(e: KeyboardEvent<HTMLDivElement>) {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
       addNote();
@@ -530,15 +535,18 @@ function LeadDetail({
   }
   function saveNoteEdit() {
     if (!noteEdit) return;
-    const body = noteEdit.body.trim();
+    const body = noteEdit.body.text.trim();
     if (!body) return;
     const { id } = noteEdit;
+    const html = noteEdit.body.html;
     const editedAt = new Date().toISOString();
-    onPatch((l) => ({ noteLog: l.noteLog.map((n) => (n.id === id && n.body !== body ? { ...n, body, editedAt } : n)) }));
+    onPatch((l) => ({
+      noteLog: l.noteLog.map((n) => (n.id === id && (n.body !== body || (n.html ?? "") !== (html ?? "")) ? { ...n, body, html, editedAt } : n)),
+    }));
     setNoteEdit(null);
     haptic("save");
   }
-  function onNoteEditKey(e: KeyboardEvent<HTMLTextAreaElement>) {
+  function onNoteEditKey(e: KeyboardEvent<HTMLDivElement>) {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
       saveNoteEdit();
@@ -630,21 +638,20 @@ function LeadDetail({
           <span className="label">NOTES</span>
           <span className="label">{lead.noteLog.length}</span>
         </div>
-        <textarea
-          className="input"
-          value={noteDraft}
-          onChange={(e) => setNoteDraft(e.target.value)}
+        <RichTextEditor
+          key={draftKey}
+          onChange={setNoteDraft}
           onKeyDown={onNoteKey}
           placeholder="Called, emailed, what they said… (Ctrl+Enter to add)"
-          aria-label="New note"
-          style={{ height: 88, resize: "vertical" }}
+          ariaLabel="New note"
+          minHeight={88}
         />
         <button
           type="button"
           className="btn btn-primary"
           style={{ marginTop: 8, width: "100%" }}
           onClick={addNote}
-          disabled={!noteDraft.trim()}
+          disabled={!noteDraft.text.trim()}
         >
           ADD NOTE
         </button>
@@ -667,7 +674,7 @@ function LeadDetail({
                       <button
                         type="button"
                         className="btn btn-ghost"
-                        onClick={() => setNoteEdit({ id: n.id, body: n.body })}
+                        onClick={() => setNoteEdit({ id: n.id, body: { text: n.body, html: noteHtml(n.body, n.html) ?? undefined } })}
                         aria-label="Edit note"
                         title="Edit note"
                         style={{ minHeight: 26, padding: "2px 8px", fontSize: 12, lineHeight: 1 }}
@@ -689,22 +696,21 @@ function LeadDetail({
                 </div>
                 {editing ? (
                   <>
-                    <textarea
-                      className="input"
-                      value={noteEdit.body}
-                      onChange={(e) => setNoteEdit({ id: n.id, body: e.target.value })}
+                    <RichTextEditor
+                      initialHtml={editorHtml(n.body, n.html)}
+                      onChange={(v) => setNoteEdit((e) => e && { ...e, body: v })}
                       onKeyDown={onNoteEditKey}
-                      aria-label="Edit note"
+                      ariaLabel="Edit note"
+                      minHeight={96}
                       autoFocus
-                      style={{ height: 96, resize: "vertical" }}
                     />
                     <div style={{ display: "flex", justifyContent: "flex-end", gap: 4, marginTop: 6 }}>
                       <button type="button" className="btn" style={compactBtn} onClick={() => setNoteEdit(null)}>CANCEL</button>
-                      <button type="button" className="btn btn-primary" style={compactBtn} onClick={saveNoteEdit} disabled={!noteEdit.body.trim()} title={noteEdit.body.trim() ? undefined : "A note can't be empty — use × to delete it"}>SAVE</button>
+                      <button type="button" className="btn btn-primary" style={compactBtn} onClick={saveNoteEdit} disabled={!noteEdit.body.text.trim()} title={noteEdit.body.text.trim() ? undefined : "A note can't be empty — use × to delete it"}>SAVE</button>
                     </div>
                   </>
                 ) : (
-                  <p style={{ margin: 0, whiteSpace: "pre-wrap", lineHeight: 1.5, overflowWrap: "anywhere" }}>{n.body}</p>
+                  <RichText body={n.body} html={n.html} style={{ lineHeight: 1.5 }} />
                 )}
               </article>
             );

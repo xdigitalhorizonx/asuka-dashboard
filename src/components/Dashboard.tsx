@@ -11,6 +11,8 @@ import { Crm } from "./Crm";
 import { Customers, money } from "./Customers";
 import { Invoices } from "./Invoices";
 import { DhTools } from "./DhTools";
+import { RichText, RichTextEditor } from "./RichNote";
+import { editorHtml, noteHtml, type RichValue } from "@/lib/rich-text";
 
 type Tab = "overview" | "reminders" | "calendar" | "notes" | "files" | "crm" | "invoices" | "customers" | "tools";
 type Store = ReturnType<typeof useAsukaStore>;
@@ -642,17 +644,28 @@ function Notes({ store }: { store: Store }) {
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<string | null>(store.notes[0]?.id ?? null);
   const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [edit, setEdit] = useState<{ id: string; title: string; body: string } | null>(null);
+  const [draft, setDraft] = useState<RichValue>({ text: "" });
+  /** Bumped after a save to remount (clear) the new-note editor. */
+  const [draftKey, setDraftKey] = useState(0);
+  const [edit, setEdit] = useState<{ id: string; title: string; body: RichValue } | null>(null);
   const filtered = store.notes.filter((n) => `${n.title} ${n.body}`.toLowerCase().includes(q.toLowerCase()));
   const active = store.notes.find((n) => n.id === sel) || null;
   const editing = !!active && edit?.id === active.id;
-  const canSaveEdit = !!edit && (!!edit.title.trim() || !!edit.body.trim());
+  const canSaveEdit = !!edit && (!!edit.title.trim() || !!edit.body.text.trim());
 
+  function addNote() {
+    if (!title.trim() && !draft.text.trim()) return;
+    const id = uid("n");
+    store.setNotes((ns) => [{ id, title: title || "Untitled", body: draft.text, html: draft.html, updatedAt: new Date().toISOString(), pinned: false }, ...ns]);
+    setSel(id);
+    setTitle("");
+    setDraft({ text: "" });
+    setDraftKey((k) => k + 1);
+  }
   function saveEdit() {
     if (!edit || !canSaveEdit) return;
     const { id, title: t, body: b } = edit;
-    store.setNotes((ns) => ns.map((x) => (x.id === id ? { ...x, title: t.trim() || "Untitled", body: b, updatedAt: new Date().toISOString() } : x)));
+    store.setNotes((ns) => ns.map((x) => (x.id === id ? { ...x, title: t.trim() || "Untitled", body: b.text, html: b.html, updatedAt: new Date().toISOString() } : x)));
     setEdit(null);
     haptic("save");
   }
@@ -672,19 +685,20 @@ function Notes({ store }: { store: Store }) {
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search notes" className="input" style={{ marginBottom: 10 }} />
         <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
           <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="New title" className="input" />
-          <textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="Body" className="input" style={{ height: 70 }} />
-          <button
-            className="btn btn-primary"
-            style={{ padding: 8 }}
-            onClick={() => {
-              if (!title.trim() && !body.trim()) return;
-              const id = uid("n");
-              store.setNotes((ns) => [{ id, title: title || "Untitled", body, updatedAt: new Date().toISOString(), pinned: false }, ...ns]);
-              setSel(id);
-              setTitle("");
-              setBody("");
+          <RichTextEditor
+            key={draftKey}
+            onChange={setDraft}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                e.preventDefault();
+                addNote();
+              }
             }}
-          >SAVE NOTE</button>
+            placeholder="Body"
+            ariaLabel="New note body"
+            minHeight={70}
+          />
+          <button className="btn btn-primary" style={{ padding: 8 }} onClick={addNote}>SAVE NOTE</button>
         </div>
         <div style={{ overflow: "auto", flex: 1 }}>
           {filtered.sort((a, b) => Number(b.pinned) - Number(a.pinned)).map((n) => (
@@ -699,7 +713,14 @@ function Notes({ store }: { store: Store }) {
         {!active ? <p style={{ color: "var(--color-muted)" }}>Select a note.</p> : editing && edit ? (
           <div style={{ display: "grid", gap: 10 }} onKeyDown={onEditKey}>
             <input value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} placeholder="Title" className="input" aria-label="Note title" />
-            <textarea value={edit.body} onChange={(e) => setEdit({ ...edit, body: e.target.value })} placeholder="Body" className="input" aria-label="Note body" autoFocus style={{ height: 260, resize: "vertical" }} />
+            <RichTextEditor
+              initialHtml={editorHtml(active.body, active.html)}
+              onChange={(v) => setEdit((e) => e && { ...e, body: v })}
+              placeholder="Body"
+              ariaLabel="Note body"
+              minHeight={260}
+              autoFocus
+            />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <span style={{ fontSize: 13, color: "var(--color-muted)" }}>Ctrl+Enter to save · Esc to cancel</span>
               <div style={{ display: "flex", gap: 6 }}>
@@ -713,12 +734,12 @@ function Notes({ store }: { store: Store }) {
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
               <h2 className="card-title" style={{ margin: 0, minWidth: 0, overflowWrap: "anywhere" }}>{active.title}</h2>
               <div style={{ display: "flex", gap: 6 }}>
-                <button type="button" className="btn" style={{ padding: "6px 10px" }} onClick={() => setEdit({ id: active.id, title: active.title, body: active.body })}>EDIT</button>
+                <button type="button" className="btn" style={{ padding: "6px 10px" }} onClick={() => setEdit({ id: active.id, title: active.title, body: { text: active.body, html: noteHtml(active.body, active.html) ?? undefined } })}>EDIT</button>
                 <button className="btn" style={{ padding: "6px 10px" }} onClick={() => store.setNotes((ns) => ns.map((x) => (x.id === active.id ? { ...x, pinned: !x.pinned, updatedAt: new Date().toISOString() } : x)))}>{active.pinned ? "UNPIN" : "PIN"}</button>
                 <button type="button" className="btn btn-danger" onClick={() => { store.setNotes((ns) => ns.filter((x) => x.id !== active.id)); setSel(null); }}>Delete</button>
               </div>
             </div>
-            <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.6, color: "var(--color-text)" }}>{active.body}</p>
+            <RichText body={active.body} html={active.html} />
             <p style={{ marginTop: 16, fontSize: 13, color: "var(--color-muted)" }}>{new Date(active.updatedAt).toLocaleString()}</p>
           </>
         )}

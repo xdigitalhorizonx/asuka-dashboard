@@ -77,7 +77,10 @@ export function normalizeReminder(raw: Partial<Reminder> & { id: string; title: 
 export interface Note {
   id: string;
   title: string;
+  /** Plain text — search, previews and Asuka read this. */
   body: string;
+  /** Formatted copy of `body` (bold, colour, highlight…), when it has any. See lib/rich-text.ts. */
+  html?: string;
   updatedAt: string;
   pinned: boolean;
 }
@@ -97,7 +100,10 @@ export type CrmStage = "new_lead" | "appointment_set" | "proposal_sent" | "close
 /** One timestamped entry in a lead's running log (call, email, meeting, …). */
 export interface LeadNote {
   id: string;
+  /** Plain text — search, the Overview feed and Asuka read this. */
   body: string;
+  /** Formatted copy of `body`, when it has any. See lib/rich-text.ts. */
+  html?: string;
   createdAt: string;
   /** Set when the note was changed after it was logged. */
   editedAt?: string;

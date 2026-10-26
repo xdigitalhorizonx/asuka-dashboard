@@ -14,7 +14,9 @@ itself is called **Central Dogma**).
   Google Tasks app, and Asuka's SMS reminders land in the same list. **Google Calendar** events show on
   the Calendar tab and the Overview "Today" panel. One click to connect — see *Google: Tasks + Calendar*.
 - Calendar of due dates **and lead appointments**
-- Notes
+- Notes — rich text: bold, italic, underline, strikethrough, **text colour**, **highlight**, text size,
+  bulleted / numbered lists and clear formatting (toolbar above the note, or Ctrl/⌘+B · I · U,
+  Ctrl/⌘+Shift+H to highlight, Ctrl/⌘+\ to clear). CRM lead notes use the same editor.
 - **Attachments** — drop, pick or paste files (≤100 MB each). Each file is its own object in Vercel
   Blob (`asuka-command-center/files/<random id>/<name>`), uploaded straight from the browser, and
   opened/downloaded through the session-gated `/api/files/<id>` (blob URLs never reach the page).
@@ -185,7 +187,13 @@ curl -X POST "$DASHBOARD_URL/api/sync" \
   -d '{"action":"upsert_lead","lead":{"id":"l_jane","name":"Jane Doe","company":"Acme Co","email":"jane@acme.com","phone":"775-555-0100","value":0,"stage":"new_lead","notes":"via SMS","createdAt":"2026-09-10T20:00:00Z","updatedAt":"2026-09-10T20:00:00Z"}}'
 ```
 
-Lead shape: `{ id, name, company, email, phone, value, stage, notes, noteLog: [{id, body, createdAt}], appointmentAt?: "YYYY-MM-DDTHH:MM", createdAt, updatedAt }`.
+Lead shape: `{ id, name, company, email, phone, value, stage, notes, noteLog: [{id, body, html?, createdAt, editedAt?}], appointmentAt?: "YYYY-MM-DDTHH:MM", createdAt, updatedAt }`.
+
+Note shape: `{ id, title, body, html?, updatedAt, pinned }`. `body` is always the **plain text** (list items
+as `• ` / `1. ` lines), so Asuka can read and write it as before. `html` is the formatted copy the board
+saves when a note has formatting; it's sanitized to a small allowlist before it's shown (`src/lib/rich-text.ts`).
+If `body` is changed without touching `html` (e.g. Asuka rewrites a note), the board shows the new plain
+`body` instead of the stale formatting — so sending only `body` is always safe.
 Stages: `new_lead | appointment_set | proposal_sent | closed_won | lost`.
 
 Customer shape: `{ id, company, contact, address, phone, email, website, notes, transactions: [{id, amount, method: "check"|"cash"|"card", date: "YYYY-MM-DD", memo, createdAt, stripeId?}], stripeCustomerId?, createdAt, updatedAt }`.
