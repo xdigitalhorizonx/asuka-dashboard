@@ -1,8 +1,8 @@
-import { createHmac, timingSafeEqual } from "crypto";
-import { ObjectExistsError, ROOT, listObjects, putObject, readObjectJson } from "./blobstore";
+import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "crypto";
+import { ObjectExistsError, ROOT, listObjects, putObject, randomId, readObjectJson } from "./blobstore";
 
 /**
- * Asuka's operations channel: inbound texts from Dialpad.
+ * Asuka's operations channel: inbound texts (Dialpad) and the PIN-gated PC command queue.
  *
  * Everything here is write-once objects in Blob storage (see blobstore.ts), never the
  * board's JSON vault, so the browser's whole-board saves can't erase it and two writers
@@ -10,9 +10,12 @@ import { ObjectExistsError, ROOT, listObjects, putObject, readObjectJson } from 
  *
  *   ops/sms-in/<dialpad id>.json     an inbound text from an allowed sender
  *   ops/sms-ack/<dialpad id>.json    Asuka has handled that text
+ *   ops/pc/<id>/cmd.json             a queued PC command (PIN kept only as a scrypt hash)
+ *   ops/pc/<id>/claim.json           the PC agent picked it up (first claimer wins)
+ *   ops/pc/<id>/result.json          what the PC agent reported back
  *
- * Asuka sends texts herself; this deployment only receives them. The webhook secret
- * lives only in a Vercel env var.
+ * Asuka sends texts herself; this deployment only receives them. Secrets (webhook
+ * secret, PC token) live only in Vercel env vars.
  */
 
 const OPS = `${ROOT}/ops`;
@@ -35,6 +38,7 @@ export function smsOwners(): string[] {
 export function smsStatus() {
   return {
     inboundConfigured: !!process.env.DIALPAD_WEBHOOK_SECRET && smsOwners().length > 0,
+    pcConfigured: !!process.env.ASUKA_PC_TOKEN,
   };
 }
 
@@ -142,4 +146,116 @@ export async function smsAck(ids: unknown): Promise<string[]> {
     done.push(id);
   }
   return done;
+}
+
+// ---------- PC command queue ----------
+
+export interface PcCommand {
+  id: string;
+  command: string;
+  /** scrypt(pin, salt) — the PIN itself is never stored. */
+  salt: string;
+  hash: string;
+  kdf: { N: number; r: number; p: number; keylen: number };
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface PcResult {
+  id: string;
+  status: "ok" | "error" | "rejected";
+  output: string;
+  at: string;
+}
+
+const KDF = { N: 1 << 15, r: 8, p: 1, keylen: 32 };
+const PC_TTL_MS = 10 * 60 * 1000;
+const COMMAND_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const PIN_RE = /^\d{4,12}$/;
+
+export function pinHash(pin: string, salt: Buffer, kdf = KDF): Buffer {
+  return scryptSync(pin, salt, kdf.keylen, { N: kdf.N, r: kdf.r, p: kdf.p, maxmem: 128 * kdf.N * kdf.r * 2 });
+}
+
+/** Queue a named command for the PC agent. The PC checks the PIN against its own local copy. */
+export async function pcEnqueue(command: unknown, pin: unknown): Promise<{ id: string; command: string; expiresAt: string }> {
+  const name = String(command ?? "").trim().toLowerCase();
+  const code = String(pin ?? "").trim();
+  if (!COMMAND_RE.test(name)) throw new OpsError("command must be a short name like `lock` or `status`");
+  if (!PIN_RE.test(code)) throw new OpsError("pin must be 4 to 12 digits");
+  const salt = randomBytes(16);
+  const now = Date.now();
+  const cmd: PcCommand = {
+    id: `${new Date(now).toISOString().replace(/[:.]/g, "-")}-${randomId(10)}`,
+    command: name,
+    salt: salt.toString("base64"),
+    hash: pinHash(code, salt).toString("base64"),
+    kdf: KDF,
+    createdAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + PC_TTL_MS).toISOString(),
+  };
+  await putJsonOnce(`${OPS}/pc/${cmd.id}/cmd.json`, cmd);
+  return { id: cmd.id, command: cmd.command, expiresAt: cmd.expiresAt };
+}
+
+async function pcIndex() {
+  const objs = await listObjects(`${OPS}/pc/`);
+  const byId = new Map<string, Set<string>>();
+  for (const o of objs) {
+    const rest = o.pathname.slice(`${OPS}/pc/`.length).split("/");
+    if (rest.length !== 2) continue;
+    if (!byId.has(rest[0])) byId.set(rest[0], new Set());
+    byId.get(rest[0])!.add(rest[1]);
+  }
+  return { objs, byId };
+}
+
+/** For the PC agent: claim every unexpired command nobody has claimed yet. */
+export async function pcClaim(): Promise<PcCommand[]> {
+  const { objs, byId } = await pcIndex();
+  const out: PcCommand[] = [];
+  for (const [id, files] of byId) {
+    if (!files.has("cmd.json") || files.has("claim.json") || files.has("result.json")) continue;
+    const obj = objs.find((o) => o.pathname === `${OPS}/pc/${id}/cmd.json`);
+    const cmd = obj ? await readObjectJson<PcCommand>(obj) : null;
+    if (!cmd || Date.parse(cmd.expiresAt) < Date.now()) continue;
+    if (await putJsonOnce(`${OPS}/pc/${id}/claim.json`, { id, at: new Date().toISOString() })) out.push(cmd);
+  }
+  return out;
+}
+
+export async function pcReport(raw: unknown): Promise<PcResult> {
+  const r = (raw ?? {}) as Partial<PcResult>;
+  const id = String(r.id ?? "");
+  if (!/^[A-Za-z0-9-]{10,80}$/.test(id)) throw new OpsError("id required");
+  const status = r.status === "ok" || r.status === "error" || r.status === "rejected" ? r.status : null;
+  if (!status) throw new OpsError("status must be ok, error or rejected");
+  const { byId } = await pcIndex();
+  if (!byId.get(id)?.has("claim.json")) throw new OpsError("unknown or unclaimed command", 404);
+  const result: PcResult = { id, status, output: String(r.output ?? "").slice(0, 2000), at: new Date().toISOString() };
+  if (!(await putJsonOnce(`${OPS}/pc/${id}/result.json`, result))) throw new OpsError("result already reported", 409);
+  return result;
+}
+
+/** Recent commands with their state, newest first (for Asuka to report back). */
+export async function pcStatus(limit = 20) {
+  const { objs, byId } = await pcIndex();
+  const ids = [...byId.keys()].sort().reverse().slice(0, limit);
+  const out = [];
+  for (const id of ids) {
+    const files = byId.get(id)!;
+    const cmdObj = objs.find((o) => o.pathname === `${OPS}/pc/${id}/cmd.json`);
+    const resObj = objs.find((o) => o.pathname === `${OPS}/pc/${id}/result.json`);
+    const cmd = cmdObj ? await readObjectJson<PcCommand>(cmdObj) : null;
+    const res = resObj ? await readObjectJson<PcResult>(resObj) : null;
+    const expired = !!cmd && !files.has("claim.json") && Date.parse(cmd.expiresAt) < Date.now();
+    out.push({
+      id,
+      command: cmd?.command ?? null,
+      createdAt: cmd?.createdAt ?? null,
+      state: res ? res.status : files.has("claim.json") ? "claimed" : expired ? "expired" : "pending",
+      output: res?.output ?? null,
+    });
+  }
+  return out;
 }

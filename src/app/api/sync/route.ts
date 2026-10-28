@@ -12,7 +12,7 @@ import {
   setReminderDone,
   upsertReminder,
 } from "@/lib/reminders";
-import { OpsError, smsAck, smsInbox, smsStatus } from "@/lib/ops";
+import { OpsError, pcEnqueue, pcStatus, smsAck, smsInbox, smsStatus } from "@/lib/ops";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,15 +28,21 @@ type SyncBody =
   | { action: "upsert_note"; note: Partial<Note> & { id: string } }
   | { action: "remove_note"; id: string }
   | { action: "sms_inbox"; include_handled?: boolean }
-  | { action: "sms_ack"; ids: string[] };
+  | { action: "sms_ack"; ids: string[] }
+  | { action: "pc_enqueue"; command: string; pin: string }
+  | { action: "pc_status"; limit?: number };
 
-/** Inbound-text actions: they live in object storage, not the board vault. */
+/** Inbound-text and PC-queue actions: they live in object storage, not the board vault. */
 async function opsAction(body: SyncBody): Promise<Record<string, unknown> | null> {
   switch (body.action) {
     case "sms_inbox":
       return { messages: await smsInbox(body.include_handled === true) };
     case "sms_ack":
       return { acked: await smsAck(body.ids) };
+    case "pc_enqueue":
+      return { queued: await pcEnqueue(body.command, body.pin) };
+    case "pc_status":
+      return { commands: await pcStatus(Math.min(Math.max(Number(body.limit) || 10, 1), 50)) };
     default:
       return null;
   }
