@@ -67,6 +67,18 @@ npm run dev     # without BLOB_READ_WRITE_TOKEN it persists to ./.asuka-local-st
 - `GOOGLE_TASKS_LIST` — optional Google task-list id; default `@default` (the account's "My Tasks")
 - `GOOGLE_CALENDAR_ID` — optional calendar to show; default `primary`
 
+- `ASUKA_SMS_OWNERS` — numbers whose inbound texts Asuka acts on (normally only Brandon)
+- `DIALPAD_WEBHOOK_SECRET` — secret of the Dialpad SMS webhook pointed at `/api/dialpad/inbound`
+
+## Asuka ops: incoming texts and notes
+
+`POST /api/sync` (bearer `ASUKA_SYNC_TOKEN`) also takes:
+
+- `upsert_note` `{note:{id,title?,body?,html?,pinned?}}` / `remove_note` `{id}` — one note at a time, so Asuka never rewrites the whole board
+- `sms_inbox` `{include_handled?}` / `sms_ack` `{ids}` — texts from `ASUKA_SMS_OWNERS` that arrived via the Dialpad webhook
+
+Asuka sends texts herself; this deployment only receives them. Incoming texts live as write-once objects under `asuka-command-center/ops/` in Blob, not in the board vault, so a browser save can never erase them.
+
 ## Google: Tasks + Calendar
 
 Once Brandon has pressed **Connect Google** (Reminders tab → *Google account* card) as

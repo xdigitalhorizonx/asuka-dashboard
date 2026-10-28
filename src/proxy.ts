@@ -14,6 +14,7 @@ const OPEN = [
   "/api/login",
   "/api/logout",
   "/api/sync",
+  "/api/dialpad/inbound", // Dialpad webhook; HS256 signature checked in the route
   "/api/stripe/webhook",
   "/api/google/callback", // Google's redirect carries no session; guarded by its own state cookie
   "/manifest.webmanifest",
