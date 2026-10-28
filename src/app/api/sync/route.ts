@@ -12,7 +12,7 @@ import {
   setReminderDone,
   upsertReminder,
 } from "@/lib/reminders";
-import { OpsError, pcEnqueue, pcStatus, sendSms, smsAck, smsInbox, smsSent, smsStatus } from "@/lib/ops";
+import { OpsError, pcEnqueue, pcStatus, smsAck, smsInbox, smsStatus } from "@/lib/ops";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,24 +27,18 @@ type SyncBody =
   | { action: "upsert_lead"; lead: Partial<Lead> }
   | { action: "upsert_note"; note: Partial<Note> & { id: string } }
   | { action: "remove_note"; id: string }
-  | { action: "send_sms"; to: string; text: string }
   | { action: "sms_inbox"; include_handled?: boolean }
   | { action: "sms_ack"; ids: string[] }
-  | { action: "sms_sent"; limit?: number }
   | { action: "pc_enqueue"; command: string; pin: string }
   | { action: "pc_status"; limit?: number };
 
-/** Texting and PC-queue actions: they live in object storage, not the board vault. */
+/** Inbound-text and PC-queue actions: they live in object storage, not the board vault. */
 async function opsAction(body: SyncBody): Promise<Record<string, unknown> | null> {
   switch (body.action) {
-    case "send_sms":
-      return { sent: await sendSms(String(body.to ?? ""), String(body.text ?? "")) };
     case "sms_inbox":
       return { messages: await smsInbox(body.include_handled === true) };
     case "sms_ack":
       return { acked: await smsAck(body.ids) };
-    case "sms_sent":
-      return { sent: await smsSent(Math.min(Math.max(Number(body.limit) || 20, 1), 200)) };
     case "pc_enqueue":
       return { queued: await pcEnqueue(body.command, body.pin) };
     case "pc_status":

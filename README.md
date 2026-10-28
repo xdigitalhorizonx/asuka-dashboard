@@ -67,24 +67,19 @@ npm run dev     # without BLOB_READ_WRITE_TOKEN it persists to ./.asuka-local-st
 - `GOOGLE_TASKS_LIST` — optional Google task-list id; default `@default` (the account's "My Tasks")
 - `GOOGLE_CALENDAR_ID` — optional calendar to show; default `primary`
 
-- `DIALPAD_API_KEY`, `DIALPAD_FROM`, `DIALPAD_USER_ID` — Asuka's texting line (Dialpad). The key stays
-  server-side; Asuka sends through `/api/sync` `send_sms`
-- `ASUKA_SMS_TO` — comma-separated E.164 numbers Asuka may text (anything else is refused)
 - `ASUKA_SMS_OWNERS` — numbers whose inbound texts Asuka acts on (normally only Brandon)
 - `DIALPAD_WEBHOOK_SECRET` — secret of the Dialpad SMS webhook pointed at `/api/dialpad/inbound`
 - `ASUKA_PC_TOKEN` — bearer for the PC agent on `/api/pc` (see `pc-agent/README.md`)
-- `DIALPAD_API_BASE` — optional; tests only (points texting at a mock server)
 
-## Asuka ops: texting, notes and PC commands
+## Asuka ops: incoming texts, notes and PC commands
 
 `POST /api/sync` (bearer `ASUKA_SYNC_TOKEN`) also takes:
 
 - `upsert_note` `{note:{id,title?,body?,html?,pinned?}}` / `remove_note` `{id}` — one note at a time, so Asuka never rewrites the whole board
-- `send_sms` `{to,text}` — Dialpad text to a number on `ASUKA_SMS_TO` (≤1600 chars); `sms_sent` lists recent sends
 - `sms_inbox` `{include_handled?}` / `sms_ack` `{ids}` — texts from `ASUKA_SMS_OWNERS` that arrived via the Dialpad webhook
 - `pc_enqueue` `{command,pin}` / `pc_status` — PIN-gated PC commands; only a scrypt hash of the PIN is stored and the PC checks it against its own copy
 
-These live as write-once objects under `asuka-command-center/ops/` in Blob, not in the board vault, so a browser save can never erase them.
+Asuka sends texts herself; this deployment only receives them. Texts and PC commands live as write-once objects under `asuka-command-center/ops/` in Blob, not in the board vault, so a browser save can never erase them.
 
 ## Google: Tasks + Calendar
 

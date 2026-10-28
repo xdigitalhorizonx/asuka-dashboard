@@ -2,7 +2,7 @@ import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { ObjectExistsError, ROOT, listObjects, putObject, randomId, readObjectJson } from "./blobstore";
 
 /**
- * Asuka's operations channel: texting (Dialpad) and the PIN-gated PC command queue.
+ * Asuka's operations channel: inbound texts (Dialpad) and the PIN-gated PC command queue.
  *
  * Everything here is write-once objects in Blob storage (see blobstore.ts), never the
  * board's JSON vault, so the browser's whole-board saves can't erase it and two writers
@@ -10,12 +10,12 @@ import { ObjectExistsError, ROOT, listObjects, putObject, randomId, readObjectJs
  *
  *   ops/sms-in/<dialpad id>.json     an inbound text from an allowed sender
  *   ops/sms-ack/<dialpad id>.json    Asuka has handled that text
- *   ops/sms-out/<ts>-<rand>.json     an outbound text and Dialpad's answer
  *   ops/pc/<id>/cmd.json             a queued PC command (PIN kept only as a scrypt hash)
  *   ops/pc/<id>/claim.json           the PC agent picked it up (first claimer wins)
  *   ops/pc/<id>/result.json          what the PC agent reported back
  *
- * Secrets (Dialpad key, webhook secret, PC token) live only in Vercel env vars.
+ * Asuka sends texts herself; this deployment only receives them. Secrets (webhook
+ * secret, PC token) live only in Vercel env vars.
  */
 
 const OPS = `${ROOT}/ops`;
@@ -30,11 +30,6 @@ function numberList(v: string | undefined): string[] {
     .filter((s) => /^\+\d{8,15}$/.test(s));
 }
 
-/** Numbers Asuka may text (ASUKA_SMS_TO, e.g. Brandon and Jeff). */
-export function smsRecipients(): string[] {
-  return numberList(process.env.ASUKA_SMS_TO);
-}
-
 /** Numbers whose inbound texts Asuka acts on (ASUKA_SMS_OWNERS, normally only Brandon). */
 export function smsOwners(): string[] {
   return numberList(process.env.ASUKA_SMS_OWNERS);
@@ -42,9 +37,7 @@ export function smsOwners(): string[] {
 
 export function smsStatus() {
   return {
-    sendConfigured: !!(process.env.DIALPAD_API_KEY && process.env.DIALPAD_FROM && process.env.DIALPAD_USER_ID),
     inboundConfigured: !!process.env.DIALPAD_WEBHOOK_SECRET && smsOwners().length > 0,
-    recipients: smsRecipients().length,
     pcConfigured: !!process.env.ASUKA_PC_TOKEN,
   };
 }
@@ -74,72 +67,6 @@ async function readAll<T>(prefix: string): Promise<{ pathname: string; uploadedA
     if (value) out.push({ pathname: o.pathname, uploadedAt: o.uploadedAt, value });
   }
   return out;
-}
-
-// ---------- outbound texts ----------
-
-export interface SentSms {
-  to: string;
-  text: string;
-  at: string;
-  status: number | null;
-  id: string | null;
-  messageStatus: string | null;
-  error: string | null;
-}
-
-const MAX_SMS_CHARS = 1600;
-
-/** Send one text from Asuka's Dialpad line to an allowed recipient. */
-export async function sendSms(to: string, text: string): Promise<SentSms> {
-  const key = process.env.DIALPAD_API_KEY;
-  const from = process.env.DIALPAD_FROM;
-  const userId = process.env.DIALPAD_USER_ID;
-  if (!key || !from || !userId) throw new OpsError("texting is not configured on this deployment", 503);
-  if (!smsRecipients().includes(to)) throw new OpsError("recipient is not on ASUKA_SMS_TO", 403);
-  const body = typeof text === "string" ? text.trim() : "";
-  if (!body) throw new OpsError("text required");
-  if (body.length > MAX_SMS_CHARS) throw new OpsError(`text over ${MAX_SMS_CHARS} characters; split it`);
-
-  const base = (process.env.DIALPAD_API_BASE || "https://dialpad.com").replace(/\/+$/, "");
-  let status: number | null = null;
-  let resp: Record<string, unknown> = {};
-  let error: string | null = null;
-  try {
-    const res = await fetch(`${base}/api/v2/sms`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({
-        from_number: from,
-        to_numbers: [to],
-        user_id: Number(userId),
-        text: body,
-        infer_country_code: false,
-      }),
-    });
-    status = res.status;
-    const raw = await res.text();
-    try {
-      resp = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-    } catch {
-      resp = {};
-    }
-    if (!res.ok) error = raw.slice(0, 300) || `HTTP ${res.status}`;
-  } catch (err) {
-    error = err instanceof Error ? err.message : String(err);
-  }
-
-  const sent: SentSms = {
-    to,
-    text: body,
-    at: new Date().toISOString(),
-    status,
-    id: resp.id != null ? String(resp.id) : null,
-    messageStatus: typeof resp.message_status === "string" ? resp.message_status : null,
-    error,
-  };
-  await putJsonOnce(`${OPS}/sms-out/${sent.at.replace(/[:.]/g, "-")}-${randomId(8)}.json`, sent);
-  return sent;
 }
 
 // ---------- inbound texts ----------
@@ -219,14 +146,6 @@ export async function smsAck(ids: unknown): Promise<string[]> {
     done.push(id);
   }
   return done;
-}
-
-export async function smsSent(limit = 50): Promise<SentSms[]> {
-  const sent = await readAll<SentSms>(`${OPS}/sms-out/`);
-  return sent
-    .map((s) => s.value)
-    .sort((a, b) => (a.at < b.at ? 1 : -1))
-    .slice(0, limit);
 }
 
 // ---------- PC command queue ----------
