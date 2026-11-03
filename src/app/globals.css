@@ -929,3 +929,215 @@ main.content {
     animation-iteration-count: 1 !important;
   }
 }
+
+/* ---------- Notes tab ---------- */
+.notes-list {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  min-height: 320px;
+}
+@media (min-width: 1024px) {
+  .notes-list {
+    position: sticky;
+    top: 16px;
+    max-height: calc(100vh - 140px);
+  }
+}
+.notes-search {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.notes-search .input {
+  width: 100%;
+  padding-right: 34px;
+}
+.notes-kbd,
+.notes-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.notes-kbd {
+  min-width: 20px;
+  padding: 1px 6px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--color-muted);
+  text-align: center;
+  pointer-events: none;
+}
+.notes-clear {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.notes-clear:hover {
+  background: color-mix(in srgb, var(--color-primary) 7%, transparent);
+  color: var(--color-text);
+}
+.notes-count {
+  font-size: 12px;
+  color: var(--color-muted);
+  margin: 0 2px 6px;
+}
+.notes-rows {
+  overflow: auto;
+  flex: 1;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+.notes-group {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  margin: 10px 4px 4px;
+}
+.notes-group:first-child {
+  margin-top: 2px;
+}
+.notes-empty {
+  padding: 18px 6px;
+  color: var(--color-muted);
+  font-size: 14px;
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+.note-row {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: background-color 200ms, border-color 200ms;
+}
+@media (hover: hover) {
+  .note-row:hover {
+    background: color-mix(in srgb, var(--color-primary) 5%, transparent);
+  }
+}
+.note-row[aria-current="true"] {
+  background: var(--color-selected);
+  border-color: var(--color-selected-edge);
+}
+.note-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.note-row-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.note-row-time {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+}
+.note-row-snippet {
+  font-size: 13px;
+  color: var(--color-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.note-pin {
+  color: var(--color-lemon);
+}
+.note-hit {
+  background: #fff0a0;
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+.notes-detail {
+  padding: 22px;
+  scroll-margin-top: 12px;
+  min-height: 320px;
+}
+.notes-title-input {
+  font-size: 18px;
+  font-weight: 600;
+}
+.notes-meta {
+  font-size: 13px;
+  color: var(--color-muted);
+}
+@media (pointer: coarse) {
+  .notes-hint,
+  .notes-kbd {
+    display: none;
+  }
+}
+.notes-toast {
+  position: fixed;
+  left: 50%;
+  bottom: max(20px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 10px 10px 16px;
+  border-radius: 14px;
+  background: var(--color-text);
+  color: #fff;
+  font-size: 14px;
+  box-shadow: 0 12px 30px -12px rgba(58, 42, 54, 0.55);
+  animation: notes-toast-in 180ms ease-out;
+}
+.notes-toast span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notes-toast button {
+  flex-shrink: 0;
+  min-height: 36px;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 10px;
+  background: var(--color-primary-soft);
+  color: var(--color-on-primary);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+@keyframes notes-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .notes-toast {
+    animation: none;
+  }
+}

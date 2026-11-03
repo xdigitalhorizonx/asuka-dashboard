@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { CalendarEvent, Lead, Reminder, ReminderPriority } from "@/lib/types";
 import { uid, useAsukaStore, useCalendarEvents } from "@/lib/store";
 import { apptTime, hasAppointment, localToday, tint } from "@/lib/crm";
@@ -11,8 +11,7 @@ import { Crm } from "./Crm";
 import { Customers, money } from "./Customers";
 import { Invoices } from "./Invoices";
 import { DhTools } from "./DhTools";
-import { RichText, RichTextEditor } from "./RichNote";
-import { editorHtml, noteHtml, type RichValue } from "@/lib/rich-text";
+import { Notes } from "./Notes";
 
 type Tab = "overview" | "reminders" | "calendar" | "notes" | "files" | "crm" | "invoices" | "customers" | "tools";
 type Store = ReturnType<typeof useAsukaStore>;
@@ -636,114 +635,6 @@ function CalendarView({ reminders, leads, googleCalendar, monthOffset, setMonthO
           </button>
         ))}
       </aside>
-    </div>
-  );
-}
-
-function Notes({ store }: { store: Store }) {
-  const [q, setQ] = useState("");
-  const [sel, setSel] = useState<string | null>(store.notes[0]?.id ?? null);
-  const [title, setTitle] = useState("");
-  const [draft, setDraft] = useState<RichValue>({ text: "" });
-  /** Bumped after a save to remount (clear) the new-note editor. */
-  const [draftKey, setDraftKey] = useState(0);
-  const [edit, setEdit] = useState<{ id: string; title: string; body: RichValue } | null>(null);
-  const filtered = store.notes.filter((n) => `${n.title} ${n.body}`.toLowerCase().includes(q.toLowerCase()));
-  const active = store.notes.find((n) => n.id === sel) || null;
-  const editing = !!active && edit?.id === active.id;
-  const canSaveEdit = !!edit && (!!edit.title.trim() || !!edit.body.text.trim());
-
-  function addNote() {
-    if (!title.trim() && !draft.text.trim()) return;
-    const id = uid("n");
-    store.setNotes((ns) => [{ id, title: title || "Untitled", body: draft.text, html: draft.html, updatedAt: new Date().toISOString(), pinned: false }, ...ns]);
-    setSel(id);
-    setTitle("");
-    setDraft({ text: "" });
-    setDraftKey((k) => k + 1);
-  }
-  function saveEdit() {
-    if (!edit || !canSaveEdit) return;
-    const { id, title: t, body: b } = edit;
-    store.setNotes((ns) => ns.map((x) => (x.id === id ? { ...x, title: t.trim() || "Untitled", body: b.text, html: b.html, updatedAt: new Date().toISOString() } : x)));
-    setEdit(null);
-    haptic("save");
-  }
-  function onEditKey(e: ReactKeyboardEvent) {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-      e.preventDefault();
-      saveEdit();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      setEdit(null);
-    }
-  }
-
-  return (
-    <div className="split split-left" style={{ ["--split-w" as string]: "320px" }}>
-      <div className="card" style={{ padding: 14, display: "flex", flexDirection: "column", minHeight: 320 }}>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search notes" className="input" style={{ marginBottom: 10 }} />
-        <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
-          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="New title" className="input" />
-          <RichTextEditor
-            key={draftKey}
-            onChange={setDraft}
-            onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                e.preventDefault();
-                addNote();
-              }
-            }}
-            placeholder="Body"
-            ariaLabel="New note body"
-            minHeight={70}
-          />
-          <button className="btn btn-primary" style={{ padding: 8 }} onClick={addNote}>SAVE NOTE</button>
-        </div>
-        <div style={{ overflow: "auto", flex: 1 }}>
-          {filtered.sort((a, b) => Number(b.pinned) - Number(a.pinned)).map((n) => (
-            <button key={n.id} type="button" onClick={() => { setSel(n.id); if (edit?.id !== n.id) setEdit(null); }} aria-pressed={n.id === sel} style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 10px", borderRadius: 12, border: n.id === sel ? "1px solid var(--color-selected-edge)" : "1px solid transparent", background: n.id === sel ? "var(--color-selected)" : "transparent", color: "inherit", cursor: "pointer", minWidth: 0, transition: "background-color 200ms, border-color 200ms" }}>
-              <div style={{ fontSize: 13, fontWeight: 500 }}>{n.pinned ? "★ " : ""}{n.title}</div>
-              <div style={{ fontSize: 13, color: "var(--color-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.body}</div>
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="card" style={{ padding: 22 }}>
-        {!active ? <p style={{ color: "var(--color-muted)" }}>Select a note.</p> : editing && edit ? (
-          <div style={{ display: "grid", gap: 10 }} onKeyDown={onEditKey}>
-            <input value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} placeholder="Title" className="input" aria-label="Note title" />
-            <RichTextEditor
-              initialHtml={editorHtml(active.body, active.html)}
-              onChange={(v) => setEdit((e) => e && { ...e, body: v })}
-              placeholder="Body"
-              ariaLabel="Note body"
-              minHeight={260}
-              autoFocus
-            />
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 13, color: "var(--color-muted)" }}>Ctrl+Enter to save · Esc to cancel</span>
-              <div style={{ display: "flex", gap: 6 }}>
-                <button type="button" className="btn" style={{ padding: "6px 10px" }} onClick={() => setEdit(null)}>CANCEL</button>
-                <button type="button" className="btn btn-primary" style={{ padding: "6px 10px" }} onClick={saveEdit} disabled={!canSaveEdit} title={canSaveEdit ? undefined : "Add a title or body to save"}>SAVE</button>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
-              <h2 className="card-title" style={{ margin: 0, minWidth: 0, overflowWrap: "anywhere" }}>{active.title}</h2>
-              <div style={{ display: "flex", gap: 6 }}>
-                <button type="button" className="btn" style={{ padding: "6px 10px" }} onClick={() => setEdit({ id: active.id, title: active.title, body: { text: active.body, html: noteHtml(active.body, active.html) ?? undefined } })}>EDIT</button>
-                <button className="btn" style={{ padding: "6px 10px" }} onClick={() => store.setNotes((ns) => ns.map((x) => (x.id === active.id ? { ...x, pinned: !x.pinned, updatedAt: new Date().toISOString() } : x)))}>{active.pinned ? "UNPIN" : "PIN"}</button>
-                <button type="button" className="btn btn-danger" onClick={() => { store.setNotes((ns) => ns.filter((x) => x.id !== active.id)); setSel(null); }}>Delete</button>
-              </div>
-            </div>
-            <RichText body={active.body} html={active.html} />
-            <p style={{ marginTop: 16, fontSize: 13, color: "var(--color-muted)" }}>{new Date(active.updatedAt).toLocaleString()}</p>
-          </>
-        )}
-      </div>
     </div>
   );
 }
