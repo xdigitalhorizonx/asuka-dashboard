@@ -6,6 +6,8 @@ import { haptic } from "@/lib/haptics";
 import { PULL_EVENT } from "@/lib/store";
 import type { PaymentsStatus } from "@/lib/invoice/payments";
 import type { InvoiceInput } from "@/lib/invoice/store";
+import type { InvoicePackage } from "@/lib/invoice/packages";
+import type { Customer, Lead } from "@/lib/types";
 import {
   cardFee,
   depositSplit,
@@ -53,7 +55,15 @@ type Payload = {
 /** `recurringText` is the "then $___ per period" price the subscription bills after this invoice. */
 type EditLine = InvoiceLine & { amountText: string; recurringText: string };
 /** `discountText` / `discountKind` edit the invoice discount ("" = none). */
-type Draft = Omit<InvoiceInput, "lines" | "discount"> & { lines: EditLine[]; discountText: string; discountKind: InvoiceDiscount["kind"] };
+type Draft = Omit<InvoiceInput, "lines" | "discount"> & { lines: EditLine[]; discountText: string; discountKind: InvoiceDiscount["kind"]; received?: Received };
+/**
+ * A payment already in hand when a new invoice is made (a Zelle deposit, a check at the
+ * meeting): recorded on the invoice right after it's created. `amountText` "" = what's due
+ * now (the deposit, or the whole total).
+ */
+type Received = { method: OfflineMethod; amountText: string; date: string; reference: string };
+/** A Customers-tab or CRM record the Bill-to picker can fill the client from. */
+type ClientPick = { key: string; kind: "customer" | "lead"; label: string; sub: string; client: InvoiceInput["client"] };
 const PER: Record<RecurringInterval, string> = { month: "mo", year: "yr" };
 
 /** Paid (or its deposit is), has recurring lines, but not every interval has its subscription yet. */
@@ -119,6 +129,56 @@ function blankDraft(fee: number): Draft {
     discountKind: "percent",
   };
 }
+/** "14082056364" / "408.205.6364" → "(408) 205-6364"; anything else is left as typed. */
+function fmtPhone(v: string): string {
+  const d = v.replace(/\D/g, "");
+  const ten = d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
+  return ten.length === 10 ? `(${ten.slice(0, 3)}) ${ten.slice(3, 6)}-${ten.slice(6)}` : v.trim();
+}
+/** Every customer and CRM lead as something the Bill-to picker can offer. Customers first. */
+function clientPicks(customers: Customer[], leads: Lead[]): ClientPick[] {
+  const out: ClientPick[] = [];
+  for (const c of customers) {
+    const label = c.company.trim() || c.contact.trim();
+    if (!label) continue;
+    out.push({
+      key: `c:${c.id}`,
+      kind: "customer",
+      label,
+      sub: [c.company.trim() && c.contact.trim(), c.email, c.phone && fmtPhone(c.phone)].filter(Boolean).join(" · "),
+      client: { name: label, email: c.email.trim(), phone: c.phone ? fmtPhone(c.phone) : "", address: c.address.trim() },
+    });
+  }
+  for (const l of leads) {
+    const person = l.name.trim().replace(/[,\s]+$/, "");
+    const label = l.company.trim() || person;
+    if (!label) continue;
+    out.push({
+      key: `l:${l.id}`,
+      kind: "lead",
+      label,
+      sub: [l.company.trim() && person, l.email, l.phone && fmtPhone(l.phone)].filter(Boolean).join(" · "),
+      client: { name: label, email: l.email.trim(), phone: l.phone ? fmtPhone(l.phone) : "", address: "" },
+    });
+  }
+  return out;
+}
+/** Picks matching what's typed in the client name box: every word must appear somewhere. */
+function matchPicks(picks: ClientPick[], q: string): ClientPick[] {
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length || q.trim().length < 2) return [];
+  return picks.filter((p) => {
+    const hay = `${p.label} ${p.sub}`.toLowerCase();
+    return words.every((w) => hay.includes(w));
+  }).slice(0, 8);
+}
+/** What a received payment records: the typed amount, or what's due now when left blank. */
+function receivedAmount(d: Draft): number {
+  if (!d.received) return 0;
+  if (d.received.amountText.trim()) return parseAmount(d.received.amountText);
+  const split = depositSplit(draftLines(d), draftDiscount(d), d.depositPercent);
+  return split ? split.now : draftSums(d).total;
+}
 function addDays(ymd: string, n: number): string {
   const d = new Date(`${ymd}T12:00:00`);
   d.setDate(d.getDate() + n);
@@ -150,8 +210,16 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<{ ok: bool
   }
 }
 
-export function Invoices() {
+/** Saved packages, or why they couldn't be read. */
+async function fetchPackages(): Promise<InvoicePackage[] | string> {
+  const r = await jsonFetch<{ packages: InvoicePackage[] }>("/api/invoices/packages");
+  return r.ok && r.data.packages ? r.data.packages : r.data.error || `HTTP ${r.status}`;
+}
+
+export function Invoices({ customers, leads }: { customers: Customer[]; leads: Lead[] }) {
   const [data, setData] = useState<Payload | null>(null);
+  /** Saved packages; null until loaded, a string when they couldn't be. */
+  const [packages, setPackages] = useState<InvoicePackage[] | string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [editing, setEditing] = useState<Invoice | null>(null);
@@ -191,6 +259,16 @@ export function Invoices() {
       document.removeEventListener("visibilitychange", onVis);
     };
   }, [apply]);
+
+  /** Re-read after saving or deleting a package. */
+  const loadPackages = useCallback(async () => setPackages(await fetchPackages()), []);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchPackages().then((p) => !cancelled && setPackages(p));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // A PDF dropped outside the zone must not navigate the board away.
   useEffect(() => {
@@ -312,6 +390,7 @@ export function Invoices() {
     const payload: Partial<Draft> = { ...d };
     delete payload.discountText;
     delete payload.discountKind;
+    delete payload.received;
     return { ...(payload as Omit<Draft, "discountText" | "discountKind">), lines, discount: draftDiscount(d) };
   }
 
@@ -335,16 +414,41 @@ export function Invoices() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(input),
         });
-    setBusy(null);
     if (!r.ok || !r.data.invoice) {
+      setBusy(null);
       setFormError(r.data.error || `Couldn't save (HTTP ${r.status}).`);
       return;
     }
+    let inv = r.data.invoice;
+    let message: string | null = null;
+    let payLater = false;
+    // A payment already in hand (new invoices only): record it now, the same way the Record-payment panel does.
+    const got = !editing && draft.received ? draft.received : null;
+    if (got) {
+      const amount = receivedAmount(draft);
+      const word = got.method === "other" && got.reference.trim() ? got.reference.trim() : METHOD_WORD[got.method];
+      const p = await jsonFetch<{ invoice: Invoice }>(`/api/invoices/${inv.id}/payments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ method: got.method, amount, date: got.date, reference: got.reference.trim(), requestId: newRequestId() }),
+      });
+      if (p.ok && p.data.invoice) {
+        inv = p.data.invoice;
+        message = `${fmtMoney(amount)} ${word} recorded on ${inv.number} — ${inv.status === "paid" ? "paid in full" : `${fmtMoney(inv.balance)} still due`}.`;
+        window.dispatchEvent(new Event(PULL_EVENT));
+      } else {
+        message = `${inv.number} was created, but the ${fmtMoney(amount)} payment wasn't recorded: ${p.data.error || `HTTP ${p.status}`}. Record it below.`;
+        payLater = true;
+      }
+    }
+    setBusy(null);
     haptic("save");
     setDraft(null);
     setParseInfo(null);
     setEditing(null);
-    setCreated(r.data.invoice);
+    setCreated(inv);
+    if (message) setNotice(message);
+    if (payLater) setPayingId(inv.id);
     await load();
   }
 
@@ -538,7 +642,7 @@ export function Invoices() {
         <section className="card" style={{ padding: 18, display: "grid", gap: 10, borderColor: tint("var(--color-green)", 45), background: tint("var(--color-green)", 6) }} aria-live="polite">
           <h2 className="card-title" style={{ margin: 0 }}>
             {created.number} is live{created.client.name ? ` for ${created.client.name}` : ""} · {fmtMoney(created.balance)}
-            {created.deposit ? ` · ${fmtMoney(created.dueNow)} deposit due now` : ""}
+            {created.status === "paid" ? " · paid in full" : created.deposit?.paidAt ? " · deposit paid" : created.deposit ? ` · ${fmtMoney(created.dueNow)} deposit due now` : ""}
           </h2>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <input className="input" readOnly value={linkFor(created)} onFocus={(e) => e.currentTarget.select()} aria-label="Invoice link" style={{ flex: "1 1 320px", fontSize: 14 }} />
@@ -568,6 +672,9 @@ export function Invoices() {
           feeAllCards={feeAllCards}
           busy={busy === "save"}
           error={formError}
+          picks={clientPicks(customers, leads)}
+          packages={packages}
+          onPackagesChanged={loadPackages}
           onSave={save}
           onCancel={() => {
             setDraft(null);
@@ -1126,6 +1233,9 @@ function DraftEditor({
   feeAllCards,
   busy,
   error,
+  picks,
+  packages,
+  onPackagesChanged,
   onSave,
   onCancel,
 }: {
@@ -1137,9 +1247,17 @@ function DraftEditor({
   feeAllCards: boolean;
   busy: boolean;
   error: string | null;
+  picks: ClientPick[];
+  packages: InvoicePackage[] | string | null;
+  onPackagesChanged: () => Promise<void>;
   onSave: () => void;
   onCancel: () => void;
 }) {
+  const [pickOpen, setPickOpen] = useState(false);
+  const [pickIndex, setPickIndex] = useState(0);
+  const [pkgBusy, setPkgBusy] = useState<string | null>(null);
+  const [pkgMsg, setPkgMsg] = useState<{ text: string; bad?: boolean } | null>(null);
+  const matches = pickOpen ? matchPicks(picks, draft.client.name) : [];
   const sums = draftSums(draft);
   const total = sums.total;
   const split = depositSplit(draftLines(draft), draftDiscount(draft), draft.depositPercent);
@@ -1152,6 +1270,56 @@ function DraftEditor({
   const setClient = (k: keyof Draft["client"], v: string) => set({ client: { ...draft.client, [k]: v } });
   const setLine = (i: number, patch: Partial<EditLine>) => set({ lines: draft.lines.map((l, j) => (j === i ? { ...l, ...patch } : l)) });
   const totalsMatch = info?.proposal?.totals.initial != null && round2(info.proposal.totals.initial) === sums.subtotal;
+  const got = !editing ? draft.received : undefined;
+  const gotAmount = got ? receivedAmount(draft) : 0;
+  const setGot = (patch: Partial<Received>) => got && set({ received: { ...got, ...patch } });
+
+  function pick(p: ClientPick) {
+    set({ client: { ...p.client } });
+    setPickOpen(false);
+    haptic("tap");
+  }
+
+  /** Drop a package's lines in: blank starter lines make way, filled ones stay. Summary + notes fill only if empty. */
+  function addPackage(p: InvoicePackage) {
+    const stamp = newRequestId().slice(0, 8);
+    const kept = draft.lines.filter((l) => l.name.trim() || parseAmount(l.amountText) > 0);
+    const added = toEdit(p.lines).map((l, i) => ({ ...l, id: `p${stamp}${i}` }));
+    set({ lines: [...kept, ...added], project: draft.project.trim() ? draft.project : p.project, notes: draft.notes.trim() ? draft.notes : p.notes });
+    setPkgMsg({ text: `Added ${p.name}.` });
+    haptic("tap");
+  }
+
+  async function savePackage() {
+    const input = draft.lines.filter((l) => l.name.trim());
+    if (!input.length) return setPkgMsg({ text: "Add a line with a service name first.", bad: true });
+    const name = window.prompt("Name this package (e.g. Website + SEO starter):", "");
+    if (!name?.trim()) return;
+    setPkgBusy("save");
+    const lines = input.map((l) => ({
+      ...l,
+      amount: parseAmount(l.amountText),
+      recurring: l.recurring ? { interval: l.recurring.interval, amount: parseAmount(l.recurringText) } : null,
+    }));
+    const r = await jsonFetch<{ package: InvoicePackage }>("/api/invoices/packages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim(), lines, project: draft.project, notes: draft.notes }),
+    });
+    setPkgBusy(null);
+    if (!r.ok) return setPkgMsg({ text: r.data.error || `Couldn't save it (HTTP ${r.status}).`, bad: true });
+    setPkgMsg({ text: `Saved “${r.data.package.name}” — it's one click away on every new invoice.` });
+    await onPackagesChanged();
+  }
+
+  async function removePackage(p: InvoicePackage) {
+    if (!window.confirm(`Delete the “${p.name}” package? Invoices already made from it don't change.`)) return;
+    setPkgBusy(`rm:${p.id}`);
+    const r = await jsonFetch(`/api/invoices/packages/${p.id}`, { method: "DELETE" });
+    setPkgBusy(null);
+    setPkgMsg(r.ok ? { text: `Deleted ${p.name}.` } : { text: r.data.error || `Couldn't delete it (HTTP ${r.status}).`, bad: true });
+    await onPackagesChanged();
+  }
   // Why Save is off, said beside the button — never a silently dead button. The deposit rule is the server's (validate.ts).
   const blocked = !draft.client.name.trim()
     ? "Add the client’s name to save."
@@ -1161,7 +1329,13 @@ function DraftEditor({
         : "Add a line with an amount to save."
       : draft.depositPercent && !split
         ? "Untick the 50% deposit — there are no one-time items to split."
-        : null;
+        : got && !(gotAmount > 0)
+          ? "Payment received: enter the amount, or untick it."
+          : got && gotAmount > total
+            ? `Payment received: it can't be more than the ${fmtMoney(total)} total.`
+            : got && (!got.date || got.date > dhToday())
+              ? "Payment received: pick the day it came in (not in the future)."
+              : null;
 
   return (
     <section className="card" style={{ padding: 18, display: "grid", gap: 14, boxShadow: `inset 0 2px 0 0 ${tint(HUE, 70)}` }} aria-label="Invoice draft">
@@ -1206,7 +1380,77 @@ function DraftEditor({
           Bill to
         </div>
         <div className="fields">
-          <input className="input" placeholder="Client / company name" value={draft.client.name} onChange={(e) => setClient("name", e.target.value)} aria-label="Client name" />
+          <div style={{ position: "relative", minWidth: 0 }}>
+            <input
+              className="input"
+              placeholder="Client name — type to search Customers + CRM"
+              value={draft.client.name}
+              onChange={(e) => {
+                setClient("name", e.target.value);
+                setPickOpen(true);
+                setPickIndex(0);
+              }}
+              onFocus={() => setPickOpen(true)}
+              onBlur={() => window.setTimeout(() => setPickOpen(false), 150)}
+              onKeyDown={(e) => {
+                if (!matches.length) return;
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setPickIndex((i) => (i + (e.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length);
+                } else if (e.key === "Enter") {
+                  e.preventDefault();
+                  pick(matches[Math.min(pickIndex, matches.length - 1)]);
+                } else if (e.key === "Escape") setPickOpen(false);
+              }}
+              role="combobox"
+              aria-expanded={matches.length > 0}
+              aria-controls="client-picks"
+              aria-autocomplete="list"
+              aria-label="Client name"
+              autoComplete="off"
+              style={{ width: "100%" }}
+            />
+            {matches.length > 0 && (
+              <div
+                id="client-picks"
+                role="listbox"
+                className="card"
+                style={{ position: "absolute", zIndex: 30, top: "calc(100% + 4px)", left: 0, width: "max(100%, min(380px, 86vw))", padding: 4, display: "grid", gap: 2, maxHeight: 320, overflowY: "auto", boxShadow: "0 12px 32px rgba(0,0,0,.28)" }}
+              >
+                {matches.map((m, i) => (
+                  <button
+                    key={m.key}
+                    type="button"
+                    role="option"
+                    aria-selected={i === pickIndex}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => pick(m)}
+                    onMouseEnter={() => setPickIndex(i)}
+                    style={{
+                      display: "grid",
+                      gap: 2,
+                      textAlign: "left",
+                      padding: "8px 10px",
+                      borderRadius: 10,
+                      border: 0,
+                      cursor: "pointer",
+                      color: "inherit",
+                      font: "inherit",
+                      background: i === pickIndex ? tint(HUE, 14) : "transparent",
+                    }}
+                  >
+                    <span style={{ display: "flex", gap: 8, alignItems: "baseline", minWidth: 0 }}>
+                      <strong style={ellipsis}>{m.label}</strong>
+                      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", color: m.kind === "customer" ? "var(--color-green)" : "var(--color-sky)", flexShrink: 0 }}>
+                        {m.kind === "customer" ? "Customer" : "CRM lead"}
+                      </span>
+                    </span>
+                    {m.sub && <span style={{ ...ellipsis, fontSize: 12, color: "var(--color-muted)" }}>{m.sub}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <input className="input" type="email" placeholder="Client email (for the receipt)" value={draft.client.email} onChange={(e) => setClient("email", e.target.value)} aria-label="Client email" />
           <input className="input" type="tel" placeholder="Phone" value={draft.client.phone} onChange={(e) => setClient("phone", e.target.value)} aria-label="Client phone" />
           <input className="input" placeholder="Address" value={draft.client.address} onChange={(e) => setClient("address", e.target.value)} aria-label="Client address" />
@@ -1239,6 +1483,56 @@ function DraftEditor({
         <span className="label">Project summary (shown on the invoice)</span>
         <textarea className="input" style={{ minHeight: 70, resize: "vertical" }} value={draft.project} onChange={(e) => set({ project: e.target.value })} />
       </label>
+
+      <div style={{ display: "grid", gap: 6 }} aria-label="Saved packages">
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <span className="label" style={{ marginRight: 4 }}>
+            Packages
+          </span>
+          {packages === null && <span style={{ fontSize: 13, color: "var(--color-muted)" }}>Loading…</span>}
+          {typeof packages === "string" && <span style={{ fontSize: 13, color: "var(--color-danger)" }}>Couldn&rsquo;t load packages · {packages}</span>}
+          {Array.isArray(packages) && packages.length === 0 && <span style={{ fontSize: 13, color: "var(--color-muted)" }}>None saved yet — build the lines once, then save them as a package.</span>}
+          {Array.isArray(packages) &&
+            packages.map((p) => {
+              // "$2,495.00 + $129.00/mo": the one-time price, then the repeat prices (not the first-period total).
+              const once = round2(p.lines.filter((l) => !l.recurring || !(l.recurring.amount > 0)).reduce((s, l) => s + l.amount, 0));
+              const reps = recurringGroups(p.lines);
+              return (
+                <span key={p.id} style={{ display: "inline-flex", alignItems: "stretch", borderRadius: 999, border: `1px solid ${tint(HUE, 45)}`, background: tint(HUE, 8), overflow: "hidden" }}>
+                  <button
+                    type="button"
+                    onClick={() => addPackage(p)}
+                    title={p.lines.map((l) => `${l.name} — ${fmtMoney(l.amount)}${l.recurring ? ` then ${fmtMoney(l.recurring.amount)}/${PER[l.recurring.interval]}` : ""}`).join("\n")}
+                    style={{ border: 0, background: "transparent", color: "inherit", font: "inherit", fontSize: 13, padding: "6px 4px 6px 12px", cursor: "pointer" }}
+                  >
+                    <strong>+ {p.name}</strong>{" "}
+                    <span style={{ color: "var(--color-muted)" }}>
+                      {fmtMoney(once)}
+                      {reps.map((g) => ` + ${fmtMoney(g.amount)}/${PER[g.interval]}`).join("")}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void removePackage(p)}
+                    disabled={pkgBusy === `rm:${p.id}`}
+                    aria-label={`Delete package ${p.name}`}
+                    style={{ border: 0, background: "transparent", color: "var(--color-muted)", font: "inherit", padding: "0 10px 0 6px", cursor: "pointer" }}
+                  >
+                    ×
+                  </button>
+                </span>
+              );
+            })}
+          <button type="button" className="btn btn-ghost" onClick={() => void savePackage()} disabled={pkgBusy === "save"} style={{ minHeight: 32, padding: "4px 10px", fontSize: 13 }}>
+            {pkgBusy === "save" ? "Saving…" : "Save these lines as a package"}
+          </button>
+        </div>
+        {pkgMsg && (
+          <span role="status" style={{ fontSize: 13, color: pkgMsg.bad ? "var(--color-danger)" : "var(--color-accent)" }}>
+            {pkgMsg.text}
+          </span>
+        )}
+      </div>
 
       <div>
         <div className="label" style={{ marginBottom: 6 }}>
@@ -1440,6 +1734,75 @@ function DraftEditor({
           )}
         </div>
       </div>
+
+      {!editing && (
+        <div style={{ display: "grid", gap: 8, padding: 12, borderRadius: 12, border: `1px solid ${got ? tint("var(--color-green)", 45) : "var(--color-border)"}`, background: got ? tint("var(--color-green)", 5) : undefined }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={!!got}
+              onChange={(e) => set({ received: e.target.checked ? { method: "other", amountText: "", date: dhToday(), reference: "" } : undefined })}
+              style={{ width: 18, height: 18, margin: 0, accentColor: "var(--color-green)" }}
+            />
+            Payment already received (Zelle, check, cash…)
+          </label>
+          {got && (
+            <>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+                <label style={{ display: "grid", gap: 4 }}>
+                  <span className="label">How</span>
+                  <select className="input" value={got.method} onChange={(e) => setGot({ method: e.target.value as OfflineMethod })} style={{ minWidth: 150 }}>
+                    {OFFLINE_METHODS.map((m) => (
+                      <option key={m} value={m}>
+                        {OFFLINE_METHOD_LABELS[m]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: "grid", gap: 4, flex: "1 1 180px" }}>
+                  <span className="label">{REF_LABEL[got.method]}</span>
+                  <input className="input" value={got.reference} maxLength={60} placeholder={got.method === "other" ? "Zelle" : ""} onChange={(e) => setGot({ reference: e.target.value })} />
+                </label>
+                <label style={{ display: "grid", gap: 4 }}>
+                  <span className="label">Amount</span>
+                  <input
+                    className="input money"
+                    inputMode="decimal"
+                    value={got.amountText}
+                    placeholder={gotAmount > 0 && !got.amountText ? gotAmount.toFixed(2) : "0.00"}
+                    onChange={(e) => setGot({ amountText: e.target.value })}
+                    onBlur={() => {
+                      const n = parseAmount(got.amountText);
+                      if (got.amountText.trim() && Number.isFinite(n)) setGot({ amountText: n.toFixed(2) });
+                    }}
+                    style={{ width: 120, textAlign: "right" }}
+                    aria-label="Amount received"
+                  />
+                </label>
+                <label style={{ display: "grid", gap: 4 }}>
+                  <span className="label">Date received</span>
+                  <input className="input" type="date" value={got.date} max={dhToday()} onChange={(e) => setGot({ date: e.target.value })} />
+                </label>
+              </div>
+              <span style={{ fontSize: 13, color: "var(--color-muted)" }}>
+                {!got.amountText.trim() ? `Blank = what's due now (${fmtMoney(gotAmount)}). ` : ""}
+                {gotAmount > 0 && gotAmount <= total
+                  ? gotAmount >= total
+                    ? "Creates the invoice already paid in full."
+                    : split && gotAmount >= split.now
+                      ? `Covers the deposit — ${fmtMoney(round2(total - gotAmount))} stays due on the link.`
+                      : `${fmtMoney(round2(total - gotAmount))} stays due on the link.`
+                  : ""}
+              </span>
+              {repeats.length > 0 && (
+                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-amber)" }}>
+                  No card gets saved this way, so the {repeats.map((g) => `${fmtMoney(g.amount)}/${PER[g.interval]}`).join(" + ")} won&rsquo;t bill on its own. Put the monthly on its own invoice the client pays by card.
+                </span>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       <label style={{ display: "grid", gap: 4 }}>
         <span className="label">Notes (shown on the invoice)</span>

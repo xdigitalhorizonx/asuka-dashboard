@@ -212,7 +212,7 @@ export default function Dashboard({ lockable = false }: { lockable?: boolean }) 
               ) : tab === "customers" ? (
                 <Customers store={store} />
               ) : tab === "invoices" ? (
-                <Invoices />
+                <Invoices customers={store.customers} leads={store.leads} />
               ) : tab === "tools" ? null : (
                 <Crm store={store} />
               )}
